@@ -1,0 +1,44 @@
+//ATNLPpt (prompts):
+
+---
+ATNLPpt_normalisation (o3 prompt);
+
+The following tensorflow code transforms the features of a 1D sequence represented as an image between 2 keypoints. I want you to make a PyTorch version with a number of additional upgrades;
+
+1. keypoints also include the last token in the input (this is the current token being read/predicted and corresponds to the prediction target during training/eval).
+2. please identify all keypoints using spacy library (POS types) along with their start/end character positions.
+3. then extract a) every ordered (do not switch) permutation of 2 keypoints in the batch sequence, b) the last r (user defined) set of consecutive 2 keypoints in batch sequence, or c) the last r (user defined) set of consecutive 2->q keypoints in batch sequence. b) is used during train, c) is used during eval, a) is dev mode only. b) will generate a set of B1*r PyTorch output tensors during train (for every batch sample), c) will generate a set of B1*r*(q-1) PyTorch output tensors during eval (for every batch sample). If the num keypoints detected in a sequence is less than 2, r or q, then the output tensor subset for all invalid keypoint pairs will be set to all zeros.
+4. assume the input tensor shape is B1, C, L1, and the output tensor is shape B2, C, L2;
+- B2 is encapsulates the number of normalisations (sets of 2 keypoints); either b) B1*r or c) B1*r*(q-1).
+- C is number of channels (total number of possible tokens in a dictionary eg 128, user defined), 
+- L1 js the number of tokens in the original sequence (containing all keypoints).
+- L2 is the number of tokens in each transformed sequence (between sets of 2 keypoints).
+5. Should batch process the tensors in parallel; no python for loops. Such that the tensors can be all transformed in parallel the normalisation function now takes a keypoint array of shape B2*2 where the 2 keypoints correspond to the index of the first keypoint and the index of the second keypoint in the input sequence.
+6. If necessary use an appropriate library to batch crop and transform the input tensors (eg PyTorch 3d).
+
+When writing the code, reference and comment my upgrade requirements in full (1 to 6).
+
+[ATNLPtf_normalisation.py]
+
+---
+ATNLPpt_comparison (o3 prompt);
+
+I have a series of images and I want to compare the similarity between them producing a unit similarity vector. PyTorch only. 
+
+Assume the images are n dimensional tensors (not loaded from file)
+
+---
+ANNpt_data (o3 prompt);
+
+Here is code for creating a dataset loader for generating textual characters (useNLPcharacterInput=True) or Bert tokens (useNLPcharacterInput=False). I would like to upgrade this dataloader to always generate 3 datatypes; and a) Bert embedding tokens, b) textual characters, and c) spacy tokens, where the bert tokens produced also have character alignment data (start/end character index). Is it possible to have a pytorch dataloader that generates 3 different datatypes? 
+
+def loadDatasetNLP():
+...
+def encode(batch):
+...
+def collate(batch):
+...
+class RawSampleDataset(TorchIterableDataset):
+...
+def createDataLoaderNLP(dataset: "Dataset | HFDIterable"):
+
