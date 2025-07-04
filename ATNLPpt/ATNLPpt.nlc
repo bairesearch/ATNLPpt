@@ -25,7 +25,17 @@ ATNLPpt_comparison (o3 prompt);
 
 I have a series of images and I want to compare the similarity between them producing a unit similarity vector. PyTorch only. 
 
-Assume the images are n dimensional tensors (not loaded from file)
+Assume the images are n dimensional tensors (not loaded from file).
+
+Please upgrade the code to perform these specific comparisons;
+- The images being compared are all 1 dimensional (If a 2D image comparison is performed, set size y = 1; however you might be able to perform dedicated 1D comparisons).
+- The candidates being compared are contained in a tensor of shape [B2, C, L2], where B2 is the candidate batchSize, C is the number of channels, and L2 is the 1D image length (size x).
+- The image database being compared to is also stored in a tensor, of shape [B3, C, L2], where B3 is the database batchSize and is much larger than B2.
+- For each comparison between the batch candidates and batch database, a unit similarity vector is produced [*]. These comparisons are performed in parallel.
+- Each image in the image database also has an associated integer class target (that was generated during training); the class target tensor is of shape [B3].
+- For each comparison between a batch candidate and the entire batch database, the highest similarity vector H is identified (and its associated class target). All these comparisons are performed in parallel [*].
+ 
+- Note that B2 contains multiple snapshot images for each sample in B1. Assume these are interweaven (standard flatten procedure). For each sample in B1, the code outputs a) the class target and b) average similarity of the database image with the highest average unit similarity (averaged across all H in B1 sample).
 
 ---
 ANNpt_data (o3 prompt);

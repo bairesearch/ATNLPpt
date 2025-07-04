@@ -194,6 +194,10 @@ def processDataset(trainOrTest, dataset, model):
 				loop = tqdm(loader, leave=True)
 				startTime = time.time()
 				for batchIndex, batch in enumerate(loop):
+					if(enforceConfigBatchSize):
+						batchSizeTemp = model.deriveCurrentBatchSize(batch)
+						if(batchSizeTemp != model.config.batchSize): 
+							continue
 					if(debugPrintGPUusage):
 						if batchIndex % 100 == 0:
 							print_gpu_utilization()
@@ -235,6 +239,8 @@ def processDataset(trainOrTest, dataset, model):
 		if(useAlgorithmEISANI and limitConnections):
 			if(not debugLimitConnectionsSequentialSANI):
 				model.executePostTrainPrune(trainOrTest)
+		if(trainOrTest and useAlgorithmATNLP):
+			model.finaliseTrainedSnapshotDatabase()
 
 		saveModel(model)
 		

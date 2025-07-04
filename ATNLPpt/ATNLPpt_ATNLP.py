@@ -42,7 +42,6 @@ def createModel(dataset):
 		print("\t trainNumberOfEpochs = ", trainNumberOfEpochs)
 		print("\t ---")
 		print("\t batchSize = ", batchSize)
-		print("\t numberOfLayers = ", numberOfLayers)
 		print("\t inputLayerSize (numberOfFeatures) = ", numberOfFeatures)
 		print("\t outputLayerSize (numberOfClasses) = ", numberOfClasses)
 		print("\t ---")

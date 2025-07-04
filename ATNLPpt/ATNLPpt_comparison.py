@@ -20,67 +20,183 @@ ATNLPpt comparison
 from ANNpt_globalDefs import *
 import torch
 import torch.nn.functional as F
-from typing import Sequence, Union
+from typing import Sequence, Union, Tuple, Optional
 
 @torch.inference_mode()
-def unit_similarity_vectors_nd(
-    imgs: Union[Sequence[torch.Tensor], torch.Tensor],
-    do_center: bool = False,          # subtract per-image mean before flattening
-    eps: float = 1e-8,
-    device: str | torch.device = "cpu",
-) -> torch.Tensor:
-    """
-    Args
-    ----
-    imgs       : - list / tuple of tensors *of identical shape*  
-                 - or a single tensor shaped (B, *dims)
-                 Any dtype accepted; will be cast to float32.
-    do_center  : if True, subtract each image's mean value before similarity.
-    eps        : numerical guard for division by 0.
-    device     : 'cuda', 'cpu', or torch.device
+def compare_1d_batches(
+	candidates: torch.Tensor,		   # shape (B2, C, L)
+	database: torch.Tensor,			 # shape (B3, C, L)   - B3 >> B2
+	db_classes: torch.Tensor,		   # shape (B3,)  - int64 class targets
+	B1: int,
+	*,
+	chunk: Optional[int] = None,		# split database along B3 for memory (None = no chunking)
+	eps: float = 1e-8,
+	device: str | torch.device = "cpu",
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+	"""
+	1-D cosine comparison of a batch of **candidates** against a large **database**.
 
-    Returns
-    -------
-    sim_vecs   : (B, B) tensor where row i is the unit-L2 similarity vector
-                 (cosine similarities) of image i to every other image.
-                 ||row_i||_2 == 1.
-    """
-    device = torch.device(device)
+	Returns
+	-------
+	unit_sim : (B2, B3)  - each row is the *unit-L2* similarity vector of one candidate
+	top_cls  : (B2,)	 - class target of the single database item most similar to each candidate
+	avg_top  : ()		- scalar, average of those top similarities across the whole candidate batch
+	"""
+	device = torch.device(device)
+	candidates = candidates.to(device, dtype=torch.float32)
+	database   = database.to(device, dtype=torch.float32)
+	db_classes = db_classes.to(device)
 
-    # --------- stack imgs into (B, *) float32 ---------------------------------
-    if isinstance(imgs, torch.Tensor):
-        x = imgs
-        if x.ndim < 2:
-            raise ValueError("Need at least a batch dimension plus data dims.")
-    else:
-        x = torch.stack(list(imgs), dim=0)
-    x = x.to(device, dtype=torch.float32)
+	B2, C, L   = candidates.shape
+	B3, C2, L2 = database.shape
+	assert C == C2 and L == L2, "Candidates and database must have identical C and L"
 
-    # optional centering (helps when overall intensity shifts matter less)
-    if do_center:
-        x = x - x.mean(dim=tuple(range(1, x.ndim)), keepdim=True)
+	# ---------------------------------------------------------------------- #
+	# 1. flatten (C, L) -> (D) and L2-normalise feature vectors			   #
+	# ---------------------------------------------------------------------- #
+	cand_feat = F.normalize(candidates.reshape(B2, -1), p=2, dim=1, eps=eps)  # (B2, D)
+	db_feat = F.normalize(database.reshape(B3, -1),   p=2, dim=1, eps=eps)  # (B3, D)
 
-    # --------- flatten each image to a vector ---------------------------------
-    B = x.shape[0]
-    feats = x.reshape(B, -1)                    # (B, D)
+	# ---------------------------------------------------------------------- #
+	# 2. pairwise cosine similarities: (B2, D)  (D, B3) -> (B2, B3).		  #
+	#	If B3 is huge, do it in manageable chunks to save RAM.			  #
+	# ---------------------------------------------------------------------- #
+	if chunk is None:
+		sim = cand_feat @ db_feat.T							# (B2, B3)
+	else:
+		parts = []
+		for s in range(0, B3, chunk):
+			e = min(s + chunk, B3)
+			parts.append(cand_feat @ db_feat[s:e].T)		   # (B2, e-s)
+		sim = torch.cat(parts, dim=1)						  # (B2, B3)
 
-    # --------- L2-normalise features (unit vector per image) ------------------
-    feats = F.normalize(feats, p=2, dim=1, eps=eps)      # (B, D)
+	# ---------------------------------------------------------------------- #
+	# 3. convert each row into a **unit similarity vector** (L2 = 1).		#
+	# ---------------------------------------------------------------------- #
+	unit_sim = F.normalize(sim, p=2, dim=1, eps=eps)		   # (B2, B3)
 
-    # --------- cosine similarity matrix ---------------------------------------
-    sim = feats @ feats.T                                # (B, B), range [-1 .. 1]
+	'''
+	# ---------------------------------------------------------------------- #
+	# 4. find best-matching DB entry for every candidate.					#
+	#	 top_idx  : argmax similarity along B3							 #
+	#	 top_vals : corresponding similarity scores						#
+	# ---------------------------------------------------------------------- #
+	top_vals, top_idx = sim.max(dim=1)						 # (B2,), (B2,)
 
-    # --------- convert each row to **unit similarity vector** -----------------
-    sim_vecs = F.normalize(sim, p=2, dim=1, eps=eps)     # (B, B),  ||row_i||_2 == 1
+	# class targets of those best matches
+	top_cls = db_classes[top_idx]							  # (B2,)
 
-    return sim_vecs
+	# average similarity of the \u201cwinning\u201d matches (scalar)
+	avg_top = top_vals.mean()								  # ()
+	
+	   return unit_sim, top_cls, avg_top
+	'''
+	
+	# --- aggregate over S snapshots per logical sample -----------------------
+	B2, B3 = sim.shape
+	assert B2 % B1 == 0, "B2 must be a multiple of base_batch"
+	S	  = B2 // B1								   # snapshots per sample
+
+	mean_sim = sim.view(B1, S, B3).mean(dim=1)		  # (B1, B3)
+	best_vals, best_idx = mean_sim.max(dim=1)		   # (B1,)
+
+	top_cls = db_classes[best_idx]					  # (B1,)
+	avg_sim = best_vals								 # (B1,)
+
+	return unit_sim, top_cls, avg_sim
+	
 
 
-'''
-# Suppose we have 10 tensors shaped (4, 16, 16) - e.g. 4-channel 1616 images
-imgs = torch.rand(10, 4, 16, 16)          # replace with your actual data
 
-sim_vecs = unit_similarity_vectors_nd(imgs, do_center=True, device="cpu")
-print(sim_vecs.shape)      # torch.Size([10, 10])
-print(sim_vecs[0])         # similarity profile of first image (unit norm)
-'''
+@torch.inference_mode()
+def compare_1d_shift_invariant(
+	candidates: torch.Tensor,	   # (B2, C, L)
+	database:   torch.Tensor,	   # (B3, C, L)
+	db_classes: torch.Tensor,	   # (B3,)
+	B1: int,
+	*,
+	shiftInvariantPixels: int = None,   # None -> full (L-1)
+	chunk: int | None = None,
+	eps: float = 1e-8,
+	device="cpu",
+):
+	"""
+	FFT cross-correlation with optional K-pixel invariance.
+	"""
+	device = torch.device(device)
+	candidates = candidates.to(device, dtype=torch.float32)
+	database   = database.to(device,   dtype=torch.float32)
+	db_classes = db_classes.to(device)
+
+	B2, C, L   = candidates.shape
+	B3		 = database.shape[0]
+	K		  = (L - 1) if shiftInvariantPixels is None else int(shiftInvariantPixels)
+	K		  = max(0, min(K, L - 1))				 # clamp
+
+	fft_len	= 2 * L - 1							 # full linear corr length
+	idx0	   = L - 1								 # zero-shift index
+	low, high  = idx0 - K, idx0 + K + 1				# slice bounds
+
+	# ----------------------------------------------------------- FFT once
+	cand_fft  = torch.fft.rfft(candidates, n=fft_len)  # (B2, C, F)
+	cand_nrm  = torch.linalg.vector_norm(candidates, dim=(1, 2))  # (B2,)
+
+	# prep outputs
+	sim_rows, best_vals, best_idx = [], [], []
+
+	step = chunk or B3
+	for s in range(0, B3, step):
+		e = min(s + step, B3)
+
+		db_fft  = torch.fft.rfft(database[s:e], n=fft_len)	 # (chunk, C, F)
+		db_nrm  = torch.linalg.vector_norm(database[s:e], dim=(1, 2))  # (chunk,)
+
+		# cross-spectra summed over channels
+		prod = (cand_fft.unsqueeze(1) * db_fft.conj()).sum(dim=2)	   # (B2, chunk, F)
+		corr = torch.fft.irfft(prod, n=fft_len, dim=2)				  # (B2, chunk, 2L-1)
+
+		# ---- keep only lags in K ------------------------------------
+		corr_window = corr[..., low:high]							   # (B2, chunk, 2K+1)
+		maxcorr, shift_idx = corr_window.max(dim=2)					 # (B2, chunk)
+
+		sim_block = maxcorr / (cand_nrm[:, None] * db_nrm[None, :] + eps)  # cosine-like
+
+		sim_rows.append(sim_block)
+
+		# best per candidate within this chunk
+		top_vals_blk, top_idx_blk = sim_block.max(dim=1)
+		best_vals.append(top_vals_blk)
+		best_idx.append(top_idx_blk + s)
+
+	sim = torch.cat(sim_rows, dim=1)									# (B2, B3)
+	unit_sim = F.normalize(sim, p=2, dim=1, eps=eps)					# (B2, B3)
+
+	'''
+	# global best match for each candidate
+	best_vals = torch.stack(best_vals, dim=1)						   # (B2, nChunks)
+	best_idx  = torch.stack(best_idx,  dim=1)						   # (B2, nChunks)
+	top_vals, col = best_vals.max(dim=1)								# (B2,)
+	top_idx  = best_idx[torch.arange(B2), col]						  # (B2,)
+
+	top_cls  = db_classes[top_idx]									  # (B2,)
+	avg_top  = top_vals.mean()										  # scalar
+	
+	return unit_sim, top_cls, avg_top
+	'''
+	
+	# --- aggregate over snapshots -------------------------------------------
+	B2, B3 = sim.shape
+	assert B2 % B1 == 0, "B2 must be a multiple of base_batch"
+	S = B2 // B1
+
+	mean_sim = sim.view(B1, S, B3).mean(dim=1)		  # (B1, B3)
+	best_vals, best_idx = mean_sim.max(dim=1)		   # (B1,)
+
+	top_cls  = db_classes[best_idx]					  # (B1,)
+	avg_sim  = best_vals								 # (B1,)
+
+	return unit_sim, top_cls, avg_sim
+
+
+
+

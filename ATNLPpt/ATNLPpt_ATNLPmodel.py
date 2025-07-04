@@ -23,10 +23,10 @@ from typing import List, Optional, Tuple
 from ANNpt_globalDefs import *
 import ATNLPpt_ATNLPmodelContinuousVarEncoding
 import ATNLPpt_normalisation
-#import ATNLPpt_comparison	#FUTURE
-#import ATNLPpt_ATNLPmodelOutput	#FUTURE
+import ATNLPpt_comparison
+import ATNLPpt_database
 
-		
+	
 class ATNLPconfig():
 	def __init__(self, batchSize, numberOfLayers, hiddenLayerSize, inputLayerSize, outputLayerSize, numberOfFeatures, numberOfClasses, fieldTypeList):
 		self.batchSize = batchSize
@@ -45,7 +45,7 @@ class Loss:
 	def item(self):
 		return self._value
 
-
+	
 # -------------------------------------------------------------
 # Core network module
 # -------------------------------------------------------------
@@ -61,6 +61,27 @@ class ATNLPmodel(nn.Module):
 		# -----------------------------
 		self.config = config
 
+		# -----------------------------
+		# database declaration
+		# -----------------------------
+		if(ATNLPsnapshotDatabaseDisk):
+			if(ATNLPsnapshotDatabaseDiskSetSize):
+				self.snapshotDatabaseWriter = ATNLPpt_database.DBWriter(datasetTrainRows*B2train, C, L2)
+			else:
+				self.snapshotDatabaseWriter = ATNLPpt_database.H5DBWriter(C, L2)
+		elif(ATNLPsnapshotDatabaseRamDynamic):
+			self.databaseRamDynamicInitialised = False
+		elif(ATNLPsnapshotDatabaseRamStatic):
+			self.imgs_list, self.cls_list = [], []
+		
+	def deriveCurrentBatchSize(self, batch):
+		(x, y) = batch
+		if not useNLPDatasetSelectTokenisation:
+			currentBatchSize = x["char_input_ids"].shape[0]
+		else:
+			currentBatchSize = x.shape[0]
+		return currentBatchSize
+		
 	# ---------------------------------------------------------
 	# Forward pass
 	# ---------------------------------------------------------
@@ -87,7 +108,6 @@ class ATNLPmodel(nn.Module):
 		"""
 		seq_char = x['char_input_ids']	# Tensor [batchSize, sequenceLength]
 		B1 = self.batchSize = seq_char.shape[0]
-		#assert (self.batchSize == self.config.batchSize), "Batch size must match config.batchSize"
 		device = seq_char.device
 
 		if(useSlidingWindow):			
@@ -121,38 +141,76 @@ class ATNLPmodel(nn.Module):
 				print("\n************************** slidingWindowIndex = ", slidingWindowIndex)
 
 			# -----------------------------
-			# Normalisation
+			# Transformation (normalisation)
 			# -----------------------------
 			if(trainOrTest):
 				mode="firstKeypointConsecutivePairs"	 #out shape = (B1*r, C, L2)
 			else:
 				mode="firstKeypointPairs"	 	#out shape = (B1*r*(q-1), C, L2)		
-			out = ATNLPpt_normalisation.normalise_batch(slidingWindowIndex, seq_char_tensor, x['spacy_pos'], x['spacy_offsets'], mode=mode, r=r, q=q, L2=L2, kp_indices_batch=kp_indices_batch, kp_meta_batch=kp_meta_batch)
+			normalisedSnapshots = ATNLPpt_normalisation.normalise_batch(slidingWindowIndex, seq_char_tensor, x['spacy_pos'], x['spacy_offsets'], mode=mode, r=r, q=q, L2=L2, kp_indices_batch=kp_indices_batch, kp_meta_batch=kp_meta_batch)
 	
 			# -----------------------------
-			# Output layer [FUTURE]
+			# Train
 			# -----------------------------
-			#predictions = EISANIpt_EISANImodelOutput.calculateOutputLayer(self, trainOrTest, layerActivations, y)
-
-			'''
-			# count how many are exactly correct
-			if(useNLPDataset):
-				valid_mask = (y != NLPcharacterInputPadTokenID)
-				valid_count = valid_mask.sum().item()
-				if valid_count > 0:
-					correct = ((predictions == y) & valid_mask).sum().item()
-					accuracyAllWindows += correct / valid_count
+			y, classTargets = self.generateClassTargets(slidingWindowIndex, normalisedSnapshots, B1, x)
+			if(trainOrTest):
+				if(ATNLPsnapshotDatabaseDisk):
+					self.databaseWrite.add_batch(normalisedSnapshots, classTargets)
+				elif(ATNLPsnapshotDatabaseRamDynamic):
+					if(self.databaseRamDynamicInitialised):
+						self.database = torch.cat((self.database, normalisedSnapshots), dim=0)        # (B3, C, L)
+						self.db_classes = torch.cat((self.db_classes, classTargets), dim=0)         # (B3,)
+					else:
+						self.databaseRamDynamicInitialised = True
+						self.database = normalisedSnapshots
+						self.db_classes = classTargets
+				elif(ATNLPsnapshotDatabaseRamStatic):
+					self.imgs_list.append(normalisedSnapshots.cpu().float())
+					self.cls_list.append(classTargets.cpu().int())
+			
+			# -----------------------------
+			# Prediction
+			# -----------------------------
+			if(not trainOrTest or ATNLPsnapshotDatabaseRamDynamic):
+				if(ATNLPsnapshotDatabaseDisk):
+					chunk = ATNLPsnapshotDatabaseDiskChunkSize
+				elif(ATNLPsnapshotDatabaseRamDynamic):
+					chunk = None
+				elif(ATNLPsnapshotDatabaseRamStatic):
+					chunk = None	#or ATNLPsnapshotDatabaseDiskChunkSize?	#chunking is advantageous only if the whole flattened database (plus the similarity matrix) cannot fit on your GPU; otherwise chunking just adds loop overhead.
+				unit_sim, top_cls, avg_sim = ATNLPpt_comparison.compare_1d_batches(normalisedSnapshots, self.database, self.db_classes, B1, chunk=chunk, device=device) #or cpu
+				predictions = top_cls
+				
+				# count how many are exactly correct
+				if(useNLPDatasetPaddingMask):
+					valid_mask = (y != NLPcharacterInputPadTokenID)
+					valid_count = valid_mask.sum().item()
+					if valid_count > 0:
+						correct = ((predictions == y) & valid_mask).sum().item()
+						accuracyAllWindows += correct / valid_count
+					else:
+						accuracyAllWindows += 0.0
 				else:
-					accuracyAllWindows += 0.0
-			else:
-				correct = (predictions == y).sum().item()
-				accuracy = correct / y.size(0)
-				accuracyAllWindows += accuracy
-			'''
+					correct = (predictions == y).sum().item()
+					accuracy = correct / y.size(0)
+					accuracyAllWindows += accuracy
 		
 		accuracy = accuracyAllWindows / numSubsamples
 		loss = Loss(0.0)
 		
 		return loss, accuracy
 
-
+	def generateClassTargets(self, slidingWindowIndex, normalisedSnapshots, B1, x):
+		#for now just predict final character in sequence window
+		#FUTURE: predict Bert tokens rather than individual characters)
+		
+		seq_char = x['char_input_ids']	# Tensor [batchSize, sequenceLength]
+		B2 = normalisedSnapshots.shape[0]
+		y = seq_char[:, slidingWindowIndex] #shape = B1	
+		reps_per_elem = B2 // B1
+		classTargets = y.repeat_interleave(reps_per_elem) #shape = B2
+		return y, classTargets
+				
+	def finaliseTrainedSnapshotDatabase(self):
+		ATNLPpt_database.finaliseTrainedSnapshotDatabase(self)
+	

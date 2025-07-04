@@ -132,6 +132,7 @@ datasetHasSubsetType = False
 datasetEqualiseClassSamples = False
 datasetEqualiseClassSamplesTest = False 
 disableDatasetCache = False
+enforceConfigBatchSize = False
 
 datasetLocalFileOptimise = False
 datasetCorrectMissingValues = False	
@@ -413,6 +414,10 @@ elif(useNLPDataset):
 	datasetCfg = "20220301.en"	#not available in conda; "20231101.en", not available in huggingface; "20240501.en"
 	datasetHasTestSplit = False
 	trainNumberOfEpochs = 1	#default: 1	#with increased epochs can significantly increase train accuracy on train dataset (though should theoretically have no effect on test accuracy)
+	if(useAlgorithmATNLP):
+		B1 = batchSize
+		#B2 is encapsulates the number of normalisations (sets of 2 keypoints); either b) B1*r or c) B1*r*(q-1).
+		B2train = B1*r
 	
 def round_up_to_power_of_2(x: float) -> int:
 	if x <= 0:

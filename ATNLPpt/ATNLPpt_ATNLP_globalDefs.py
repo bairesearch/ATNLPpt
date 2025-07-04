@@ -25,8 +25,23 @@ debugSequentialLoops = True
 debugATNLPnormalisation = True
 
 useNLPDataset = True	#mandatory
+useNLPDatasetPaddingMask = True
 
+enforceConfigBatchSize = True	#required such that (B1 and) B2 can be determined at initialisation (not dynamic)
 debugOnlyPrintStreamedWikiArticleTitles = False
+
+ATNLPsnapshotDatabaseDisk = False	#slow and high capacity
+ATNLPsnapshotDatabaseRamDynamic = True	#slow and low capacity (but enables train predictions)	#continuously update database tensor (do not use intermediary python list)	#useful for debug (required for prediction performance during train)
+ATNLPsnapshotDatabaseRamStatic = False	#fast and low capacity
+if(ATNLPsnapshotDatabaseDisk):
+	ATNLPsnapshotDatabaseDiskSetSize = True	#else dynamic
+	ATNLPsnapshotDatabaseDiskChunkSize = 20000
+	if(ATNLPsnapshotDatabaseDiskSetSize):
+		snapshotDatabaseNameFloat32 = "db_float32.mmp"
+		snapshotDatabaseNameInt32 = "db_int32.mmp"
+	else:
+		snapshotDatabaseName = "train_db.h5"
+	
 
 useSlidingWindow = True	#enables sliding window	#mandatory
 
@@ -44,7 +59,7 @@ bertNumberTokenTypes = 30522	#tokenizer = BertTokenizer.from_pretrained("bert-ba
 useTokenEmbedding = False	#use character embeddings for primary normalisation process (token embeddings are only used for prediction)
 
 contextSizeMax = 128*4	#default: 512	#production: 512*4	#assume approx 4 characters per BERT token
-numberOfClasses = bertNumberTokenTypes	#or NLPcharacterInputSetLen
+numberOfClasses = NLPcharacterInputSetLen	#FUTURE: bertNumberTokenTypes
 
 sequenceLength = contextSizeMax
 NLPcharacterInputPadTokenID = 0	#must be same as bert pad token id	#assert bert_tokenizer.pad_token_id == NLPcharacterInputPadTokenID
@@ -62,12 +77,8 @@ L2 = 10	#normalisation length for each reference set
 keypointModes = Literal["allKeypointCombinations", "firstKeypointConsecutivePairs", "firstKeypointPairs"]
 r = 3	#the last r (user defined) set of 2 consecutive keypoints in batch sequence
 q = 4   #the last r (user defined) set of 2 keypoints (of distance 2->q) in batch sequence               
-referenceSetPosDelimiters = {".", "CC", "IN", "TO", "VB", "VBD", "VBG", "VBN", "VBP", "VBZ", ",", ";"}       # identical to TF version
-
-#batch size vars;
-#B1 = batchSize
-#B2 is encapsulates the number of normalisations (sets of 2 keypoints); either b) B1*r or c) B1*r*(q-1).
-
+#referenceSetPosDelimiters = {".", "CC", "IN", "TO", "VB", "VBD", "VBG", "VBN", "VBP", "VBZ", ",", ";"}       # identical to TF version
+referenceSetPosDelimiters = {".", "VB", "VBD", "VBG", "VBN", "VBP", "VBZ"}	#verbs only	#TODO: collapse auxiliary verbs (eg tagged as VBZ/VBD) with adjacent VBN into single ref set delimiter; eg has [VBZ] run [VBN], had [VBD] gone [VBN] -> has_run [VBZ], had_gone [VBD]
 
 useNLPDatasetSelectTokenisation = False
 useCustomLearningAlgorithm = True	#mandatory (disable all backprop optimisers)
