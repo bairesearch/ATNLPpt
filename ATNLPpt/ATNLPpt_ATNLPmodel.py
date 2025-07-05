@@ -22,6 +22,7 @@ from torch import nn
 from typing import List, Optional, Tuple
 from ANNpt_globalDefs import *
 import ATNLPpt_ATNLPmodelContinuousVarEncoding
+import ATNLPpt_keypoints
 import ATNLPpt_normalisation
 import ATNLPpt_comparison
 import ATNLPpt_database
@@ -132,8 +133,9 @@ class ATNLPmodel(nn.Module):
 
 		spacy_pos = x['spacy_pos']
 		spacy_offsets = x['spacy_offsets']
-		kp_indices_batch, kp_meta_batch = ATNLPpt_normalisation.build_keypoints(spacy_pos, spacy_offsets)
-	
+		kp_indices_batch, kp_meta_batch = ATNLPpt_keypoints.build_keypoints(spacy_pos, spacy_offsets)
+		print("kp_indices_batch = ", kp_indices_batch)
+		
 		accuracyAllWindows = 0
 		#print("numSubsamples = ", numSubsamples)
 		for slidingWindowIndex in range(numSubsamples):
@@ -146,9 +148,11 @@ class ATNLPmodel(nn.Module):
 			if(trainOrTest):
 				mode="firstKeypointConsecutivePairs"	 #out shape = (B1*r, C, L2)
 			else:
-				mode="firstKeypointPairs"	 	#out shape = (B1*r*(q-1), C, L2)		
+				mode="firstKeypointPairs"	 	#out shape = (B1*r*(q-1), C, L2)	
+			print("seq_char_tensor = ", seq_char_tensor)	
 			normalisedSnapshots = ATNLPpt_normalisation.normalise_batch(slidingWindowIndex, seq_char_tensor, x['spacy_pos'], x['spacy_offsets'], mode=mode, r=r, q=q, L2=L2, kp_indices_batch=kp_indices_batch, kp_meta_batch=kp_meta_batch)
-	
+			print("normalisedSnapshots = ", normalisedSnapshots)
+			
 			# -----------------------------
 			# Train
 			# -----------------------------

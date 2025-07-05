@@ -724,7 +724,7 @@ elif(useNLPDataset):
 				def to_int64(u):                                 # keep sign if already < 2^63
 					return u if u < (1 << 63) else u - (1 << 64) # two\u2019s-complement wrap
 				sp_ids = [to_int64(tok.lex_id) for tok in doc][:contextSizeMax]
-				sp_pos = [to_int64(tok.pos)    for tok in doc][:contextSizeMax]
+				sp_pos = [to_int64(tok.tag)    for tok in doc][:contextSizeMax]
 
 				sp_off = [ (tok.idx, tok.idx+len(tok)) for tok in doc ][:contextSizeMax]
 				out["spacy_input_ids"].append(sp_ids)

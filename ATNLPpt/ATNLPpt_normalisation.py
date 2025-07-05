@@ -18,13 +18,6 @@ ATNLPpt normalisation
 # Description
 # -----------
 # PyTorch re-write of ATNLP normalisation with upgrades 1-6:
-#   (1) last token is always a key-point -> see _append_keypoints_last_token()
-#   (2) key-points are obtained with spaCy; we store POS, start & end char
-#   (3) generate key-point pairs:
-#		 a) dev  : every ordered pair
-#		 b) train: last r adjacent pairs
-#		 c) eval : last r starts, span size 2->q		  -> see _make_pairs()
-#	   Missing pairs are zero-filled as required
 #   (4) I/O tensor shapes
 #		 in : (B1, C, L1)
 #		 out: (B2, C, L2)  where B2 = B1*r	  (train)
@@ -41,78 +34,9 @@ from ANNpt_globalDefs import *
 import torch
 import torch.nn.functional as F
 import spacy
+import ATNLPpt_keypoints
 from typing import List, Dict, Tuple, Literal
 NL_MODEL = spacy.load("en_core_web_sm", disable=("ner", "parser", "lemmatizer"))
-
-
-def build_keypoints(
-	spacy_pos : torch.Tensor,		  # (B1, L1)
-	spacy_offsets : torch.Tensor,		  # (B1, L1, 2)
-) -> Tuple[List[List[int]], List[List[Dict]]]:
-
-	batchSize = spacy_pos.shape[0]
-	kp_indices_batch = []
-	kp_meta_batch = []
-	
-	for b in range(batchSize):
-		kp_indices, kp_meta = _detect_keypoints(spacy_pos[b], spacy_offsets[b])
-		kp_indices_batch.append(kp_indices)
-		kp_meta_batch.append(kp_meta)
-
-	return kp_indices_batch, kp_meta_batch
-
-# ------------------------------------------------------------------------- #
-# (1) + (2)  spaCy-based key-point detector that always includes last token #
-# ------------------------------------------------------------------------- #
-def _detect_keypoints(spacy_pos: torch.Tensor, spacy_offsets: torch.Tensor) -> Tuple[List[int], List[Dict]]:
-	"""
-	Parameters
-	----------
-	spacy_pos : torch.Tensor,		  # (L1)
-	spacy_offsets : torch.Tensor,		  # (L1, 2)
-	
-	Return
-	------
-	kp_indices : token indices that are key-points
-	kp_meta	   : [{token_idx, pos, char_start, char_end}, ...]
-	"""
-	kp_indices, kp_meta = [], []
-
-	L1 = spacy_pos.shape[0]
-	for i in range(L1):
-		is_kp = spacy_pos[i] in referenceSetPosDelimiters or i == 0
-		if is_kp:
-			kp_indices.append(i)
-		kp_meta.append({
-			"token_idx": i,
-			"pos": spacy_pos[i],
-			"char_start": spacy_offsets[i][0],	#tok.idx,
-			"char_end": spacy_offsets[i][1]	#tok.idx + len(tok)
-		})
-
-	return kp_indices, kp_meta
-
-
-def _append_keypoints_last_token(
-	last_token_idx: int,
-	L1: int,
-	kp_indices: List[int],
-	kp_meta: List[Dict] 
-):
-	"""
-	Parameters
-	----------
-	last_token_idx: int			#last token index at which to perform keypoint detection
-	L1: int
-	kp_indices : token indices that are key-points
-	kp_meta	   : [{token_idx, pos, char_start, char_end}, ...]
-	"""
-	
-	last_idx = min(last_token_idx, L1 - 1)   # clamp for safety
-	if kp_indices[-1] != last_idx:
-		kp_indices.append(last_idx)
-		kp_meta[last_idx]["is_last_keypoint"] = True
-
 
 
 # ------------------------------------------------------------------------- #
@@ -157,12 +81,12 @@ def normalise_batch(
 		
 		# All samples share the same designated 'last token' index.
 		kp_indices, kp_meta = kp_indices_batch[b].copy(), kp_meta_batch[b].copy()
-		_append_keypoints_last_token(last_token_idx, L1, kp_indices, kp_meta)
+		ATNLPpt_keypoints.append_keypoints_last_token(last_token_idx, L1, kp_indices, kp_meta)
 
 		#only build pairs from key-points strictly *before* the chosen last-token index
 		kp_use = [idx for idx in kp_indices if idx < last_token_idx]
 
-		pairs, valid = _make_pairs(kp_use, mode, r, q)				 # upgrade 3
+		pairs, valid = ATNLPpt_keypoints.make_pairs(kp_use, mode, r, q)				 # upgrade 3
 		
 		if pairs.numel():							  # may be (0,2) in dev
 			all_pairs.append(pairs)
@@ -176,7 +100,7 @@ def normalise_batch(
 	valid   = torch.cat(all_valid,  dim=0).to(device)		  # (B2,)
 	src_ids = torch.cat(sample_idx, dim=0).to(device)		  # (B2,)
 	B2 = pairs.size(0)
-
+	
 	# ------------------  single pass crop + resize (no loops) -------------- #
 	# 1. build a sampling grid in [-1,1] for grid_sample
 	start = pairs[:, 0].unsqueeze(1).float()			# (B2,1)
@@ -203,76 +127,3 @@ def normalise_batch(
 		print("output shape :", tuple(out.shape))
 				
 	return out
-
-# ------------------------------------------------------------------------- #
-# (3)  build key-point pairs for dev | train | eval modes				   #
-# ------------------------------------------------------------------------- #
-def _make_pairs(kp: List[int], mode: keypointModes, r: int, q: int) -> Tuple[torch.Tensor, torch.Tensor]:
-	"""
-	Parameters
-	----------
-	kp   : sorted list of key-point token indices
-	mode : "allKeypointCombinations" | "firstKeypointConsecutivePairs" | "firstKeypointPairs"
-	r/q  : user parameters (see requirement 3)
-
-	Return
-	------
-	pairs	: (N, 2)  long tensor of [i, j] with i<j; invalid -> 0,0
-	valid_ms : (N,)	bool tensor, True where pair is valid
-	"""
-	if len(kp) < 2:
-		# zero-fill for the expected number of rows so caller can reshape
-		if mode == "firstKeypointConsecutivePairs":
-			N = r
-		elif mode == "firstKeypointPairs":
-			N = r * (q - 1)
-		elif mode == "allKeypointCombinations":		 # we let it be empty
-			N = 0
-		return torch.zeros(N, 2, dtype=torch.long), torch.zeros(N, dtype=torch.bool)
-
-	# ------------  a) every ordered permutation -------------------- #
-	if mode == "allKeypointCombinations":
-		out = [(i, j) for idx_i, i in enumerate(kp) for j in kp[idx_i + 1:]]
-		pairs = torch.as_tensor(out, dtype=torch.long)
-		valid = torch.ones(len(out), dtype=torch.bool)
-		return pairs, valid
-
-	# ------------  b) last r adjacent pairs ---------------------- #
-	if mode == "firstKeypointConsecutivePairs":
-		adj = list(zip(kp[:-1], kp[1:]))			   # consecutive pairs
-		adj = adj[-r:]								 # last r pairs
-		valid_n = len(adj)
-		# zero-padding to fixed length r
-		pairs = torch.zeros(r, 2, dtype=torch.long)
-		if valid_n:
-			pairs[:valid_n] = torch.as_tensor(adj, dtype=torch.long)
-		valid = torch.zeros(r, dtype=torch.bool)
-		valid[:valid_n] = True
-		return pairs, valid
-
-	# ------------  c) last r starts, spans 2 -> q ------------------ #
-	if mode == "firstKeypointPairs":
-		out = []
-		starts = kp[-r:]								# last r starting kps
-		for s_idx, s in enumerate(starts):
-			# pick up to q-1 subsequent key-points
-			slice_end = len(kp) - (r - 1 - s_idx)	   # respect ordering
-			next_kps = kp[s_idx + len(kp) - r + 1 : slice_end][:q - 1]
-			if not next_kps:							# none available
-				out.extend([(0, 0)] * (q - 1))
-			else:
-				# pad to q-1 so output length is constant
-				for t in range(q - 1):
-					if t < len(next_kps):
-						out.append((s, next_kps[t]))
-					else:
-						out.append((0, 0))
-		pairs = torch.as_tensor(out, dtype=torch.long)		  # (r*(q-1), 2)
-		valid = ~(pairs[:, 0] == pairs[:, 1])
-		return pairs, valid
-
-	raise ValueError(f"Unknown mode {mode}")
-
-
-
-

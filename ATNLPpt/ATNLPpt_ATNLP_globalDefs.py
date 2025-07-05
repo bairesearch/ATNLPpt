@@ -77,8 +77,8 @@ L2 = 10	#normalisation length for each reference set
 keypointModes = Literal["allKeypointCombinations", "firstKeypointConsecutivePairs", "firstKeypointPairs"]
 r = 3	#the last r (user defined) set of 2 consecutive keypoints in batch sequence
 q = 4   #the last r (user defined) set of 2 keypoints (of distance 2->q) in batch sequence               
-#referenceSetPosDelimiters = {".", "CC", "IN", "TO", "VB", "VBD", "VBG", "VBN", "VBP", "VBZ", ",", ";"}       # identical to TF version
-referenceSetPosDelimiters = {".", "VB", "VBD", "VBG", "VBN", "VBP", "VBZ"}	#verbs only	#TODO: collapse auxiliary verbs (eg tagged as VBZ/VBD) with adjacent VBN into single ref set delimiter; eg has [VBZ] run [VBN], had [VBD] gone [VBN] -> has_run [VBZ], had_gone [VBD]
+#referenceSetPosDelimitersStr = {".", "CC", "IN", "TO", "VB", "VBD", "VBG", "VBN", "VBP", "VBZ", ",", ";"}       # identical to TF version
+referenceSetPosDelimitersStr = {".", "VB", "VBD", "VBG", "VBN", "VBP", "VBZ"}	#verbs only	#TODO: collapse auxiliary verbs (eg tagged as VBZ/VBD) with adjacent VBN into single ref set delimiter; eg has [VBZ] run [VBN], had [VBD] gone [VBN] -> has_run [VBZ], had_gone [VBD]
 
 useNLPDatasetSelectTokenisation = False
 useCustomLearningAlgorithm = True	#mandatory (disable all backprop optimisers)
@@ -93,3 +93,12 @@ dataDrive = workingDrive	#'/datasets/'
 
 modelName = 'modelATNLP'
 
+def posIntToPosString(nlp, posInt):
+	if posInt in nlp.vocab.strings:
+		return nlp.vocab[posInt].text
+	else:
+		return ''
+		
+def posStringToPosInt(nlp, posString):
+	return nlp.vocab.strings[posString]
+		
