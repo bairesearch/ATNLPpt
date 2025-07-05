@@ -37,8 +37,9 @@ elif(useNLPDataset):
 	import string
 	import spacy
 	from collections import defaultdict
-	nlp = None                       # lazy-loaded spaCy pipeline
-	
+	if(useNLPDatasetMultipleTokenisationSpacy):
+		nlp = spacy.load("en_core_web_sm", disable=["ner", "parser", "lemmatizer"])	 # spaCy pipeline
+
 if(disableDatasetCache):
 	import datasets
 	from datasets import disable_caching
@@ -626,7 +627,141 @@ elif(useNLPDataset):
 
 		return dataset
 
-	if(useNLPDatasetSelectTokenisation):
+	if(useNLPDatasetMultipleTokenisation):
+		def encode(batch):
+			"""
+			Returns per-text dictionaries with
+				if(useNLPcharacterInput):
+	    			char_input_ids  : List[int]
+				else:
+	    			bert_input_ids  : List[int]
+	    			bert_offsets    : List[(start,end)]      (char alignment)
+	    		spacy_input_ids : List[int]              (orth IDs)
+	    		spacy_pos       : List[int]              (POS enum)
+	    		spacy_offsets   : List[(start,end)]
+			"""
+			global bert_tokenizer, bert_pad_id
+
+			texts = batch["text"]
+			
+			if(useNLPDatasetMultipleTokenisationBert):
+				if bert_tokenizer is None:
+					bert_tokenizer = AutoTokenizer.from_pretrained(bertModelName, use_fast=True)
+					bert_pad_id = bert_tokenizer.pad_token_id
+				enc = bert_tokenizer(
+					texts,
+					truncation=True,
+					max_length=contextSizeMax,
+					padding=False,
+					return_offsets_mapping=True,
+				)
+				
+			out = defaultdict(list)
+			for i, txt in enumerate(texts):
+			
+				if(useNLPDatasetMultipleTokenisationChar):
+					# --- characters ---
+					char_ids = [ _CHAR2ID[ch] for ch in (txt.lower() if useNLPcharacterInputBasic else txt)
+		            			 if ch in _CHAR2ID ][:contextSizeMax]
+					out["char_input_ids"].append(char_ids)
+				if(useNLPDatasetMultipleTokenisationBert):
+					# --- BERT ---
+					out["bert_input_ids"].append(enc["input_ids"][i])
+					out["bert_offsets"].append(enc["offset_mapping"][i])
+				if(useNLPDatasetMultipleTokenisationSpacy):
+					# --- spaCy ---
+					doc = nlp(txt)
+					# Fit into signed-64 range so torch.tensor() never overflows
+					def to_int64(u):                                 # keep sign if already < 2^63
+						return u if u < (1 << 63) else u - (1 << 64) # two\u2019s-complement wrap
+					sp_ids = [to_int64(tok.lex_id) for tok in doc][:contextSizeMax]
+					sp_pos = [to_int64(tok.tag)    for tok in doc][:contextSizeMax]
+					sp_off = [ (tok.idx, tok.idx+len(tok)) for tok in doc ][:contextSizeMax]
+					out["spacy_input_ids"].append(sp_ids)
+					out["spacy_pos"].append(sp_pos)
+					out["spacy_offsets"].append(sp_off)
+
+			return out
+
+		def collate(batch):
+			B = len(batch)
+			# helper -------------------------------------------------------------
+			def pad1d(seqs, pad_id):
+				L = max(len(s) for s in seqs)
+				out = pt.full((B, L), pad_id, dtype=pt.long)
+				for i, s in enumerate(seqs):
+					out[i, :len(s)] = pt.tensor(s, dtype=pt.long)
+				return out
+			def pad2d(seqs):				# for offset pairs
+				L = max(len(s) for s in seqs)
+				out = pt.full((B, L, 2), -1, dtype=pt.long)
+				for i, s in enumerate(seqs):
+					out[i, :len(s)] = pt.tensor(s, dtype=pt.long)
+				return out
+			# -------------------------------------------------------------------
+			if(useNLPDatasetMultipleTokenisationChar):
+				char_ids   = pad1d([s["char_input_ids"]   for s in batch], NLPcharacterInputPadTokenID)
+			if(useNLPDatasetMultipleTokenisationBert):
+				bert_ids   = pad1d([s["bert_input_ids"]   for s in batch], bert_pad_id)
+				bert_off   = pad2d([s["bert_offsets"]     for s in batch])
+			if(useNLPDatasetMultipleTokenisationSpacy):
+				spacy_ids  = pad1d([s["spacy_input_ids"]  for s in batch], 0)
+				spacy_pos  = pad1d([s["spacy_pos"]        for s in batch], 0)
+				spacy_off  = pad2d([s["spacy_offsets"]    for s in batch])
+
+			x = {}
+			if(useNLPDatasetMultipleTokenisationChar):
+				x = x | {
+					"char_input_ids" : char_ids,
+					}
+			if(useNLPDatasetMultipleTokenisationBert):
+				x = x | {
+					"bert_input_ids" : bert_ids,
+					"bert_offsets"   : bert_off,
+				}
+			if(useNLPDatasetMultipleTokenisationSpacy):
+				x = x | {
+					"spacy_input_ids": spacy_ids,
+					"spacy_pos"      : spacy_pos,
+					"spacy_offsets"  : spacy_off,
+				}
+					
+			y = None	#dynamically extracted from x
+			return x, y
+
+		class RawSampleDataset(TorchIterableDataset):
+			"""
+			Pass-through: yields one dict {'input_ids': Tensor[seq_len]} per article.
+			No left-shift / crop logic here any more.
+			"""
+			def __init__(self, hf_iterable):
+				super().__init__()
+				self.hf_ds = hf_iterable
+
+			def __iter__(self):
+				for art in self.hf_ds:                          # art is already a dict from encode_multi
+					# No heavy work here \u2013 just forward the fields your collate() needs.
+					# If you prefer tensors early, uncomment the few lines below.
+
+					# for key in ("char_input_ids", "bert_input_ids", "spacy_input_ids", "spacy_pos"):
+					#     art[key] = pt.tensor(art[key], dtype=pt.long)
+					# art["bert_offsets"]  = pt.tensor(art["bert_offsets"],  dtype=pt.long)
+					# art["spacy_offsets"] = pt.tensor(art["spacy_offsets"], dtype=pt.long)
+
+					yield art
+
+			''' 
+			if(useNLPDatasetMultipleTokenisationChar):
+				"char_input_ids" : (B, Lc),
+			if(useNLPDatasetMultipleTokenisationBert):
+				"bert_input_ids" : (B, Lb),
+				"bert_offsets"   : (B, Lb, 2),
+			if(useNLPDatasetMultipleTokenisationSpacy):
+				"spacy_input_ids": (B, Ls),
+				"spacy_pos"      : (B, Ls),
+				"spacy_offsets"  : (B, Ls, 2),
+			'''
+	else:
 		def encode(batch):
 			texts = batch["text"]
 			if useNLPcharacterInput:
@@ -678,125 +813,7 @@ elif(useNLPDataset):
 					 if not isinstance(ids, pt.Tensor):
 						 ids = pt.tensor(ids, dtype=pt.long)
 					 yield ids
-	else:
-		def encode(batch):
-			"""
-			Returns per-text dictionaries with
-	    		bert_input_ids  : List[int]
-	    		bert_offsets    : List[(start,end)]      (char alignment)
-	    		char_input_ids  : List[int]
-	    		spacy_input_ids : List[int]              (orth IDs)
-	    		spacy_pos       : List[int]              (POS enum)
-	    		spacy_offsets   : List[(start,end)]
-			"""
-			global bert_tokenizer, bert_pad_id, nlp
-
-			texts = batch["text"]
-			if bert_tokenizer is None:
-				bert_tokenizer = AutoTokenizer.from_pretrained(bertModelName, use_fast=True)
-				bert_pad_id = bert_tokenizer.pad_token_id
-			if nlp is None:
-				nlp = spacy.load("en_core_web_sm", disable=["ner", "parser", "lemmatizer"])
-
-			enc = bert_tokenizer(
-				texts,
-				truncation=True,
-				max_length=contextSizeMax,
-				padding=False,
-				return_offsets_mapping=True,
-			)
-
-			out = defaultdict(list)
-			for i, txt in enumerate(texts):
-				# --- BERT ---
-				out["bert_input_ids"].append(enc["input_ids"][i])
-				out["bert_offsets"].append(enc["offset_mapping"][i])
-
-				# --- characters ---
-				char_ids = [ _CHAR2ID[ch] for ch in (txt.lower() if useNLPcharacterInputBasic else txt)
-		            		 if ch in _CHAR2ID ][:contextSizeMax]
-				out["char_input_ids"].append(char_ids)
-
-				# --- spaCy ---
-				doc = nlp(txt)
-
-				# Fit into signed-64 range so torch.tensor() never overflows
-				def to_int64(u):                                 # keep sign if already < 2^63
-					return u if u < (1 << 63) else u - (1 << 64) # two\u2019s-complement wrap
-				sp_ids = [to_int64(tok.lex_id) for tok in doc][:contextSizeMax]
-				sp_pos = [to_int64(tok.tag)    for tok in doc][:contextSizeMax]
-
-				sp_off = [ (tok.idx, tok.idx+len(tok)) for tok in doc ][:contextSizeMax]
-				out["spacy_input_ids"].append(sp_ids)
-				out["spacy_pos"].append(sp_pos)
-				out["spacy_offsets"].append(sp_off)
-
-			return out
-
-		def collate(batch):
-			B = len(batch)
-			# helper -------------------------------------------------------------
-			def pad1d(seqs, pad_id):
-				L = max(len(s) for s in seqs)
-				out = pt.full((B, L), pad_id, dtype=pt.long)
-				for i, s in enumerate(seqs):
-					out[i, :len(s)] = pt.tensor(s, dtype=pt.long)
-				return out
-			def pad2d(seqs):				# for offset pairs
-				L = max(len(s) for s in seqs)
-				out = pt.full((B, L, 2), -1, dtype=pt.long)
-				for i, s in enumerate(seqs):
-					out[i, :len(s)] = pt.tensor(s, dtype=pt.long)
-				return out
-			# -------------------------------------------------------------------
-			char_ids   = pad1d([s["char_input_ids"]   for s in batch], NLPcharacterInputPadTokenID)
-			bert_ids   = pad1d([s["bert_input_ids"]   for s in batch], bert_pad_id)
-			bert_off   = pad2d([s["bert_offsets"]     for s in batch])
-			spacy_ids  = pad1d([s["spacy_input_ids"]  for s in batch], 0)
-			spacy_pos  = pad1d([s["spacy_pos"]        for s in batch], 0)
-			spacy_off  = pad2d([s["spacy_offsets"]    for s in batch])
-
-			x = {
-				"char_input_ids" : char_ids,
-				"bert_input_ids" : bert_ids,
-				"bert_offsets"   : bert_off,
-				"spacy_input_ids": spacy_ids,
-				"spacy_pos"      : spacy_pos,
-				"spacy_offsets"  : spacy_off,
-			}
-			y = None	#dynamically extracted from x
-			return x, y
-
-		class RawSampleDataset(TorchIterableDataset):
-			"""
-			Pass-through: yields one dict {'input_ids': Tensor[seq_len]} per article.
-			No left-shift / crop logic here any more.
-			"""
-			def __init__(self, hf_iterable):
-				super().__init__()
-				self.hf_ds = hf_iterable
-
-			def __iter__(self):
-				for art in self.hf_ds:                          # art is already a dict from encode_multi
-					# No heavy work here \u2013 just forward the fields your collate() needs.
-					# If you prefer tensors early, uncomment the few lines below.
-
-					# for key in ("char_input_ids", "bert_input_ids", "spacy_input_ids", "spacy_pos"):
-					#     art[key] = pt.tensor(art[key], dtype=pt.long)
-					# art["bert_offsets"]  = pt.tensor(art["bert_offsets"],  dtype=pt.long)
-					# art["spacy_offsets"] = pt.tensor(art["spacy_offsets"], dtype=pt.long)
-
-					yield art
-
-			''' 
-			"char_input_ids" : (B, Lc),
-			"bert_input_ids" : (B, Lb),
-			"bert_offsets"   : (B, Lb, 2),
-			"spacy_input_ids": (B, Ls),
-			"spacy_pos"      : (B, Ls),
-			"spacy_offsets"  : (B, Ls, 2),
-			'''
-
+					 	
 	def createDataLoaderNLP(dataset: "Dataset | HFDIterable"):
 		"""Return DataLoader that yields (x, y) batches per the spec above."""
 
@@ -815,6 +832,7 @@ elif(useNLPDataset):
 
 		return loader
 
+if(useNLPDatasetMultipleTokenisationChar):
 	def ascii_printable_with_whitespace() -> list[str]:
 		"""
 		Return ASCII chars 0-127 with all control codes removed

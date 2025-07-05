@@ -19,6 +19,7 @@ pip install torchsummary
 pip install networkx
 pip install matplotlib
 pip install transformers
+pip install h5py
 pip install spacy
 python -m spacy download en_core_web_sm
 
@@ -71,11 +72,12 @@ import ANNpt_data
 
 def main():
 	dataset = ANNpt_data.loadDataset()
+	model = None
 	if(stateTrainDataset):
 		model = ANNpt_algorithm.createModel(dataset[datasetSplitNameTrain])	#dataset[datasetSplitNameTest] not possible as test does not contain all classes
 		processDataset(True, dataset[datasetSplitNameTrain], model)
 	if(stateTestDataset):
-		model = loadModel()
+		model = loadModel(model)
 		processDataset(False, dataset[datasetSplitNameTest], model)
 
 def createOptimizer():
@@ -278,7 +280,7 @@ def testBatch(batchIndex, batch, model, l=None, fieldTypeList=None):
 def saveModel(model):
 	torch.save(model, modelPathNameFull)
 
-def loadModel():
+def loadModel(model):
 	print("loading existing model")
 	model = torch.load(modelPathNameFull, weights_only=False)
 	return model

@@ -26,6 +26,7 @@ pip install torchsummary
 pip install networkx
 pip install matplotlib
 pip install transformers
+pip install h5py
 pip install spacy
 python -m spacy download en_core_web_sm
 ```
