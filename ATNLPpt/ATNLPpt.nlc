@@ -52,3 +52,22 @@ class RawSampleDataset(TorchIterableDataset):
 ...
 def createDataLoaderNLP(dataset: "Dataset | HFDIterable"):
 
+---
+ATNLPpt_comparison:ATNLPcomparisonShiftInvariance (o3 prompt):
+
+Also, I have noticed that there is no obvious aliasing redundancy in your comparison method. Is there a more robust image comparison method that is more flexible with respect to matching but offset pixels? 
+
+How can I modify the number of pixels the FFT comparitor is shift invariant to? Assume a parameter called shiftInvariantPixels.
+
+---
+ATNLPpt_comparison:normalisedSnapshotsSparseTensors (o3 prompt):
+
+Can you please upgrade this code (functions compare_1d_batches and compare_1d_shift_invariant); assume all dense "candidates" and "database" tensors are now sparse tensors (COO format). All image comparisons need to be performed using sparse tensors (index matching), not dense tensors
+
+---
+ATNLPpt_comparison:ATNLPsnapshotDatabaseDiskCompareChunks (o3 prompt):
+
+Now assume I used the following database code finaliseTrainedSnapshotDatabase() to generate self.database. Are the sparse matrix upgrades you provided for compare_1d_batches() and compare_1d_shift_invariant() compatible with the database loaded from my H5DB sparse database. Specifically I am concerned about chunking conflicts in the new implementation; as the database is very large it is not being loaded into RAM.
+
+OK, I really do not see the point of using an H5 database if the entire database is loaded into RAM (as a single sparse tensor). What I really want to occur is for the comparison to occur by loading the database in chunks.
+

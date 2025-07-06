@@ -37,6 +37,7 @@ def createModel(dataset):
 		print("\t ---")
 		print("\t datasetName = ", datasetName)
 		print("\t datasetSize = ", datasetSize)
+		print("\t datasetSizeSubsetName = ", datasetSizeSubsetName)
 		print("\t datasetTrainRows = ", datasetTrainRows)
 		print("\t datasetTestRows = ", datasetTestRows)
 		print("\t trainNumberOfEpochs = ", trainNumberOfEpochs)
@@ -44,6 +45,14 @@ def createModel(dataset):
 		print("\t batchSize = ", batchSize)
 		print("\t inputLayerSize (numberOfFeatures) = ", numberOfFeatures)
 		print("\t outputLayerSize (numberOfClasses) = ", numberOfClasses)
+		print("\t ---")
+		print("\t normalisedSnapshotsSparseTensors = ", normalisedSnapshotsSparseTensors)
+		print("\t ATNLPcomparisonShiftInvariance = ", ATNLPcomparisonShiftInvariance)
+		print("\t ATNLPcomparisonShiftInvariancePixels = ", ATNLPcomparisonShiftInvariancePixels)
+		print("\t ATNLPsnapshotDatabaseDisk = ", ATNLPsnapshotDatabaseDisk)
+		print("\t ATNLPsnapshotDatabaseRamDynamic = ", ATNLPsnapshotDatabaseRamDynamic)
+		print("\t ATNLPsnapshotDatabaseRamStatic = ", ATNLPsnapshotDatabaseRamStatic)
+		print("\t ATNLPsnapshotDatabaseDiskCompareChunks = ", ATNLPsnapshotDatabaseDiskCompareChunks)
 		print("\t ---")
 
 	config = ATNLPpt_ATNLPmodel.ATNLPconfig(

@@ -484,7 +484,7 @@ else:
 			"""
 			device = torch.device(device)
 			candidates = candidates.to(device, dtype=torch.float32)
-			database   = database.to(ATNLPsnapshotDatabaseLoadDevice,   dtype=torch.float32)
+			database   = database.to(ATNLPsnapshotDatabaseLoadDevice, dtype=torch.float32)
 			db_classes = db_classes.to(device)
 
 			B2, C, L   = candidates.shape

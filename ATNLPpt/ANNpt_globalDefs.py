@@ -406,14 +406,23 @@ elif(useImageDataset):
 	dropoutProb = 0.5 	#default: 0.5	#orig: 0.3
 elif(useNLPDataset):
 	datasetSizeSubset = True	#default: True (required for stateTestDataset)  #if(useSequentialSANI): hiddenLayerSizeSANI is dynamically grown, and is not dependent on datasetSize (which can therefore be huge), however a) useDatasetSubset is still useful for fast training (development/debugging) and b) is required to reserve data for an eval phase 
-	if(ATNLPsnapshotDatabaseRamStatic):
-		datasetTrainRows = 32	#default: 4 or 32
+	datasetSizeSubsetName = "small"
+	if(datasetSizeSubsetName=="small"):
+		datasetTrainRows = 128
 		datasetTestRows = int(datasetTrainRows*0.5)
-		batchSize = 16	#default: 2 or 16
-	else:
-		datasetTrainRows = 200		#default: 100000
+		batchSize = 16
+	elif(datasetSizeSubsetName=="medium"):
+		datasetTrainRows = 1000		#default: 100000
 		datasetTestRows = int(datasetTrainRows*0.1) #[datasetTestSplitSize]
-		batchSize = 16	#default: 16	#debug: 1	
+		batchSize = 64	#orig 16
+	elif(datasetSizeSubsetName=="large"):
+		datasetTrainRows = 10000		#default: 100000
+		datasetTestRows = int(datasetTrainRows*0.1) #[datasetTestSplitSize]
+		batchSize = 256
+	elif(datasetSizeSubsetName=="default"):
+		datasetTrainRows = 100000
+		datasetTestRows = int(datasetTrainRows*0.1) #[datasetTestSplitSize]
+		batchSize = 16
 	numWorkers = 0	#default: 0	(required for stateTestDataset:datasetTestRows to be enforced) #orig = 2	#set numWorkers=1 for simplify dataset determinism during streaming (numWorkers=2 will alternate between selecting articles from wikipedia dataset shard N and shard N+1)
 	datasetName = "wikipedia"
 	datasetCfg = "20220301.en"	#not available in conda; "20231101.en", not available in huggingface; "20240501.en"
@@ -523,7 +532,7 @@ def printe(str):
 
 
 import torch as pt
-useLovelyTensors = True
+useLovelyTensors = False
 if(useLovelyTensors):
 	import lovely_tensors as lt
 	lt.monkey_patch()

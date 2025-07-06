@@ -90,24 +90,21 @@ def _detect_keypoints(spacy_pos: torch.Tensor, spacy_offsets: torch.Tensor) -> T
 
 
 def append_keypoints_last_token(
-	last_token_idx: int,
-	L1: int,
+	last_spacy_token_idx: int,
 	kp_indices: List[int],
 	kp_meta: List[Dict] 
 ):
 	"""
 	Parameters
 	----------
-	last_token_idx: int			#last token index at which to perform keypoint detection
-	L1: int
+	last_spacy_token_idx: int			#last spacy token index at which to perform keypoint detection
 	kp_indices : token indices that are key-points
 	kp_meta	   : [{token_idx, pos, char_start, char_end}, ...]
 	"""
 	
-	last_idx = min(last_token_idx, L1 - 1)   # clamp for safety
-	if kp_indices[-1] != last_idx:
-		kp_indices.append(last_idx)
-		kp_meta[last_idx]["is_last_keypoint"] = True
+	if kp_indices[-1] != last_spacy_token_idx:
+		kp_indices.append(last_spacy_token_idx)
+		kp_meta[last_spacy_token_idx]["is_last_keypoint"] = True
 
 
 # ------------------------------------------------------------------------- #

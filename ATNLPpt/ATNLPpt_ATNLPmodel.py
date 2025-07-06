@@ -120,14 +120,17 @@ class ATNLPmodel(nn.Module):
 		B1 = self.batchSize = seq_input.shape[0]
 		device = seq_input.device
 
-		if(useSlidingWindow):			
-			non_pad	= (seq_input != NLPcharacterInputPadTokenID)		# [B1, L1]
-			if not pt.any(non_pad):
-				return
-			lengths	= non_pad.sum(-1)							# [B1]
-			max_len = int(lengths.max().item())
-			numSubsamples = max(1, max_len - 1)				# predict *next* token only
-			extra = contextSizeMax - lengths					# [B1]
+		if(useSlidingWindow):
+			if(useNLPDatasetPaddingMask):	
+				non_pad	= (seq_input != NLPcharacterInputPadTokenID)		# [B1, L1]
+				if not pt.any(non_pad):
+					return
+				lengths	= non_pad.sum(-1)							# [B1]
+				max_len = int(lengths.max().item())
+				numSubsamples = max(1, max_len - 1)				# predict *next* token only
+				extra = contextSizeMax - lengths					# [B1]
+			else:
+				numSubsamples = contextSizeMax
 		else:
 			numSubsamples = 1
 	
@@ -159,8 +162,10 @@ class ATNLPmodel(nn.Module):
 				mode=keypointModeTrain
 			else:
 				mode=keypointModeTest
-				
-			normalisedSnapshots = ATNLPpt_normalisation.normalise_batch(slidingWindowIndex, seq_input_encoded, x['spacy_pos'], x['spacy_offsets'], mode=mode, r=r, q=q, L2=L2, kp_indices_batch=kp_indices_batch, kp_meta_batch=kp_meta_batch)
+			
+			last_token_idx = slidingWindowIndex
+			last_spacy_token_idx = self.char_idx_to_spacy_idx(spacy_offsets, last_token_idx)
+			normalisedSnapshots = ATNLPpt_normalisation.normalise_batch(seq_input_encoded, x['spacy_pos'], x['spacy_offsets'], last_spacy_token_idx, mode=mode, r=r, q=q, L2=L2, kp_indices_batch=kp_indices_batch, kp_meta_batch=kp_meta_batch)
 			if(debugATNLPnormalisation):
 				print("seq_input_encoded = ", seq_input_encoded)	
 				print("normalisedSnapshots = ", normalisedSnapshots)
@@ -188,6 +193,7 @@ class ATNLPmodel(nn.Module):
 				
 				# count how many are exactly correct
 				if(useNLPDatasetPaddingMask):
+					#print("y = ", y)
 					valid_mask = (y != NLPcharacterInputPadTokenID)
 					valid_count = valid_mask.sum().item()
 					if valid_count > 0:
@@ -235,6 +241,8 @@ class ATNLPmodel(nn.Module):
 		B2 = normalisedSnapshots.shape[0]
 		y = seq_input[:, slidingWindowIndex] #shape = B1	
 		reps_per_elem = B2 // B1
+		#print("B2 = ", B2)
+		#print("B1 = ", B1)
 		classTargets = y.repeat_interleave(reps_per_elem) #shape = B2
 		return y, classTargets
 				
@@ -285,3 +293,55 @@ class ATNLPmodel(nn.Module):
 	
 		return seq_input
 			
+
+	def char_idx_to_spacy_idx(self,
+		spacy_offsets: torch.Tensor,   # (B, Ls, 2)  [char_start, char_end)
+		last_token_idx: torch.Tensor   # (B,) or scalar  character index
+	) -> torch.Tensor:				 # -> (B,)  token index within 0..Ls-1
+
+		"""
+		Parameters
+		----------
+		spacy_offsets  : (B, Ls, 2) long | int64
+			Offsets produced by spaCy's `Token.idx` and `Token.idx + len(tok) - 1`.
+			`spacy_offsets[b, t, 0]` \u2264 `spacy_offsets[b, t, 1]`.
+		last_token_idx : int  |  shape (B,) tensor
+			Character position that marks the 'current' / 'last' token.
+			If a scalar is supplied, the same char-index is used for every batch item.
+
+		Returns
+		-------
+		last_spacy_token_idx : (B,) long
+			For each batch sample, the token index *t* whose span contains
+			`last_token_idx[b]`, i.e.
+			`spacy_offsets[b, t, 0] \u2264 last_token_idx[b] \u2264 spacy_offsets[b, t, 1]`.
+			If no span matches (shouldn\u2019t happen in valid data) the result is 0.
+		"""
+		B, Ls, _ = spacy_offsets.shape
+		device = spacy_offsets.device
+		dtype = spacy_offsets.dtype
+
+		# --- broadcast last_token_idx to shape (B,) ---------------------------- #
+		last_char = torch.full((B,), last_token_idx, dtype=dtype, device=device)
+
+		# --- vectorised containment test  (B, Ls) ------------------------------ #
+		starts, ends = spacy_offsets[..., 0], spacy_offsets[..., 1]
+		mask = (last_char[:, None] >= starts) & (last_char[:, None] <= ends)
+
+		# --- convert boolean mask \u2192 index (first True along Ls) --------------- #
+		# `mask` is guaranteed to have at least one True per row in valid data.
+		last_spacy_token_idx = torch.argmax(mask.to(torch.int8), dim=1)
+
+		# optional: assert validity during development
+		# assert mask.any(dim=1).all(), "some last_token_idx not inside any token span"
+
+		'''
+		print("char_idx_to_spacy_idx():")
+		print("last_token_idx = ", last_token_idx)
+		print("spacy_offsets = ", spacy_offsets)
+		print("last_spacy_token_idx = ", last_spacy_token_idx)
+		'''
+		
+		return last_spacy_token_idx	# (B,) long
+	
+

@@ -21,8 +21,8 @@ import math
 from typing import Literal
 			
 printATNLPmodelProperties = True
-debugSequentialLoops = True
-debugATNLPnormalisation = True
+debugSequentialLoops = False
+debugATNLPnormalisation = False
 
 useNLPDataset = True	#mandatory
 useNLPDatasetPaddingMask = True	#default: True	#not strictly required for wikipedia dataset and small sequence lengths, as it extracts only the first L tokens from each article
@@ -45,14 +45,14 @@ generateConnectionsAfterPropagating = True	#default: True	#relevant for ATNLPsna
 
 ATNLPsnapshotDatabaseDisk = False	#slow and high capacity
 ATNLPsnapshotDatabaseRamDynamic = True	#slow and low capacity (but enables train predictions)	#continuously update database tensor (do not use intermediary python list)	#useful for debug (required for prediction performance during train)
-ATNLPsnapshotDatabaseRamStatic = False	#fast and low capacity
+ATNLPsnapshotDatabaseRamStatic = False 	#fast and low capacity
 if(ATNLPsnapshotDatabaseDisk):
 	if(normalisedSnapshotsSparseTensors):
 		ATNLPsnapshotDatabaseDiskSetSize = False	#mandatory: False (non-h5 database)
 		ATNLPsnapshotDatabaseDiskChunkSize = 1000000
 		ATNLPsnapshotDatabaseDiskCompareChunks = True	#default: True: compare database chunks directly from disk (enables comparison of a much larger database than what can be loaded into ram simultaneously)
 	else:
-		ATNLPsnapshotDatabaseDiskSetSize = False		#default: False
+		ATNLPsnapshotDatabaseDiskSetSize = False		#default: False	#plan to depreciate
 		ATNLPsnapshotDatabaseDiskChunkSize = 8000	#CHECKTHIS
 		if(ATNLPsnapshotDatabaseDiskSetSize):
 			ATNLPsnapshotDatabaseDiskCompareChunks = False	#mandatory: False (comparing images directly from disk requries h5)

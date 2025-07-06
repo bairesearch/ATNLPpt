@@ -44,10 +44,10 @@ NL_MODEL = spacy.load("en_core_web_sm", disable=("ner", "parser", "lemmatizer"))
 # ------------------------------------------------------------------------- #
 @torch.no_grad()
 def normalise_batch(
-	last_token_idx: int,
 	seq_tensor: torch.Tensor,		  # (B1, C, L1)
 	spacy_pos : torch.Tensor,		  # (B1, L1)
 	spacy_offsets : torch.Tensor,		  # (B1, L1, 2)
+	last_spacy_token_idx: int,
 	mode : keypointModes,
 	r : int,
 	q : int,
@@ -79,13 +79,18 @@ def normalise_batch(
 
 	for b in range(B1):
 		
-		# All samples share the same designated 'last token' index.
+		# Each samples has a designated 'last spacy token' index (corresponding to the spacy token encapsulating the prediction target bert token or character)
 		kp_indices, kp_meta = kp_indices_batch[b].copy(), kp_meta_batch[b].copy()
-		ATNLPpt_keypoints.append_keypoints_last_token(last_token_idx, L1, kp_indices, kp_meta)
+		ATNLPpt_keypoints.append_keypoints_last_token(last_spacy_token_idx[b], kp_indices, kp_meta)
 
-		#only build pairs from key-points strictly *before* the chosen last-token index
-		kp_use = [idx for idx in kp_indices if idx < last_token_idx]
-
+		# ------------------------------------------------------------- #
+		# Convert token-level key-points -> character-level key-points  
+		#   currently adds the first delimiter token in the reference set (but not the last delimiter token)
+		#   only build pairs from key-points strictly *before* the chosen last-token index
+		# ------------------------------------------------------------- #
+		character_offsets = spacy_offsets[b]		  # (Ls, 2) start/end
+		kp_use = [character_offsets[idx][0] for idx in kp_indices if idx < last_spacy_token_idx[b]]	
+		
 		pairs, valid = ATNLPpt_keypoints.make_pairs(kp_use, mode, r, q)				 # upgrade 3
 		
 		if pairs.numel():							  # may be (0,2) in dev
