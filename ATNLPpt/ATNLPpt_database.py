@@ -25,7 +25,7 @@ if(ATNLPsnapshotDatabaseDisk):
 		import h5py
 
 if(ATNLPsnapshotDatabaseDisk):
-	if(normalisedSnapshotsSparseTensors):
+	if(ATNLPnormalisedSnapshotsSparseTensors):
 		# ------------------------------------------------------------------
 		#  S P A R S E   H D F 5   D A T A B A S E   (disk snapshot)
 		# ------------------------------------------------------------------
@@ -203,7 +203,7 @@ if(ATNLPsnapshotDatabaseDisk):
 
 elif(ATNLPsnapshotDatabaseRamStatic):
 	def finaliseTrainedSnapshotDatabase(self):
-		if(normalisedSnapshotsSparseTensors):
+		if(ATNLPnormalisedSnapshotsSparseTensors):
 			#dense_imgs = [img.to_dense() for img in self.imgs_list]
 			#self.database = torch.cat(dense_imgs).to_sparse_coo()  # (B3, C, L) sparse
 
@@ -254,8 +254,10 @@ elif(ATNLPsnapshotDatabaseRamStatic):
 				device=values_all.device,
 			).coalesce()						  # canonical ordering / dedup
 		else:
-			self.database = torch.cat(self.imgs_list)		# (B3, C, L)
-		self.db_classes = torch.cat(self.cls_list)		 # (B3,)
+			#self.database = torch.cat(self.imgs_list)		# (B3, C, L)
+			self.database = torch.stack(self.imgs_list)		# (B3, C, L)
+		#self.db_classes = torch.cat(self.cls_list)		 # (B3,)
+		self.db_classes = torch.stack(self.cls_list)		 # (B3,)
 		self.database = self.database.to(ATNLPsnapshotDatabaseLoadDevice)
 		self.db_classes = self.db_classes.to(ATNLPsnapshotDatabaseLoadDevice)
 elif(ATNLPsnapshotDatabaseRamDynamic):

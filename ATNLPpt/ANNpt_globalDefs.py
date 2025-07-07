@@ -65,10 +65,6 @@ useSignedWeights = False
 usePositiveWeightsClampModel = False
 useCPU = False
 
-debugSmallBatchSize = False	#small batch size for debugging matrix output
-debugSmallDataset = False	#small dataset (no datasetRepeat) for debugging matrix output
-debugDataNormalisation = False
-
 trainLocal = False
 trainGreedy = False
 trainIndividialSamples = False
@@ -79,7 +75,6 @@ if(useLinearSublayers):
 else:
 	linearSublayersNumber = 1
 	
-
 #default network hierarchy parameters (overwritten by specific dataset defaults): 
 warmupEpochs = 0	#default: 0
 learningRate = 0.005	#0.005	#0.0001
@@ -97,29 +92,34 @@ dropout = False
 dropoutProb = 0.5 	#default: 0.5	#orig: 0.3
 
 #initialise (dependent vars);
-debugSmallNetwork = False
 trainNumberOfEpochsHigh = False
 inputLayerInList = True
 outputLayerInList = True
 useCNNlayers = False
 useCNNlayers2D = True
 thresholdActivations = False
-debugPrintActivationOutput = False
 simulatedDendriticBranches = False
 activationFunctionType = "relu"
 trainLastLayerOnly = False
 normaliseActivationSparsity = False
-debugUsePositiveWeightsVerify = False
 datasetNormaliseMinMax = True	#normalise between 0.0 and 1.0
 datasetNormaliseStdAvg = False	#normalise based on std and mean (~-1.0 to 1.0)
 supportSkipLayers = False
 supportSkipLayersResidual = False
 supportFieldTypeList = False
 
+#initialise (dependent vars);
+debugSmallBatchSize = False	#small batch size for debugging matrix output
+debugSmallDataset = False	#small dataset (no datasetRepeat) for debugging matrix output
+debugDataNormalisation = False
+debugSmallNetwork = False
+debugPrintActivationOutput = False
+debugUsePositiveWeightsVerify = False
+debugSkipFirstBatch = False
+
 useInbuiltCrossEntropyLossFunction = True	#required
 if(useSignedWeights):
 	usePositiveWeightsClampModel = True	#clamp entire model weights to be positive (rather than per layer); currently required
-
 
 #initialise (dependent vars);
 datasetReplaceNoneValues = False
@@ -410,7 +410,7 @@ elif(useNLPDataset):
 	if(datasetSizeSubsetName=="small"):
 		datasetTrainRows = 128
 		datasetTestRows = int(datasetTrainRows*0.5)
-		batchSize = 16
+		batchSize = 16	#default: 16
 	elif(datasetSizeSubsetName=="medium"):
 		datasetTrainRows = 1000		#default: 100000
 		datasetTestRows = int(datasetTrainRows*0.1) #[datasetTestSplitSize]

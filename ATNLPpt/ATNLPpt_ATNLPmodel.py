@@ -26,6 +26,8 @@ import ATNLPpt_keypoints
 import ATNLPpt_normalisation
 import ATNLPpt_comparison
 import ATNLPpt_database
+import hashlib
+from collections import defaultdict
 
 	
 class ATNLPconfig():
@@ -146,9 +148,10 @@ class ATNLPmodel(nn.Module):
 		spacy_pos = x['spacy_pos']
 		spacy_offsets = x['spacy_offsets']
 		kp_indices_batch, kp_meta_batch = ATNLPpt_keypoints.build_keypoints(spacy_pos, spacy_offsets)
-		if(debugATNLPnormalisation):
+		if(debugATNLPkeypoints):
 			print("kp_indices_batch = ", kp_indices_batch)
 		
+		numSubsamplesWithKeypoints = 0
 		accuracyAllWindows = 0
 		#print("numSubsamples = ", numSubsamples)
 		for slidingWindowIndex in range(numSubsamples):
@@ -164,21 +167,46 @@ class ATNLPmodel(nn.Module):
 				mode=keypointModeTest
 			
 			last_token_idx = slidingWindowIndex
-			last_spacy_token_idx = self.char_idx_to_spacy_idx(spacy_offsets, last_token_idx)
-			normalisedSnapshots = ATNLPpt_normalisation.normalise_batch(seq_input_encoded, x['spacy_pos'], x['spacy_offsets'], last_spacy_token_idx, mode=mode, r=r, q=q, L2=L2, kp_indices_batch=kp_indices_batch, kp_meta_batch=kp_meta_batch)
+			normalisedSnapshots = ATNLPpt_normalisation.normalise_batch(seq_input_encoded, x['spacy_pos'], x['spacy_offsets'], last_token_idx, mode=mode, r=r, q=q, L2=L2, kp_indices_batch=kp_indices_batch, kp_meta_batch=kp_meta_batch)
 			if(debugATNLPnormalisation):
 				print("seq_input_encoded = ", seq_input_encoded)	
 				print("normalisedSnapshots = ", normalisedSnapshots)
+				print("normalisedSnapshots.count_nonzero() = ", normalisedSnapshots.count_nonzero())
 			
-			if(normalisedSnapshotsSparseTensors):
-				normalisedSnapshots = normalisedSnapshots.to_sparse_coo()	   # or just dense.to_sparse() in \u2264 2.2
+			normalisedSnapshots, validSnapshotFound = self.removeInvalidNormalisedSnapshots(normalisedSnapshots, B1)
+			if(validSnapshotFound):
+				#print("validSnapshotFound")
+				numSubsamplesWithKeypoints += 1
+			else:
+				continue
+			
+			if(ATNLPnormalisedSnapshotsSparseTensors):
+				normalisedSnapshots = normalisedSnapshots.to_sparse_coo()
 				normalisedSnapshots = normalisedSnapshots.coalesce()	
 
-			y, classTargets = self.generateClassTargets(slidingWindowIndex, normalisedSnapshots, B1, seq_input)
+			#sanity checks;
+			if(debugATNLPsnapshotDuplicates):
+				if(ATNLPsnapshotDatabaseRamStatic):
+					for dsnap in self.imgs_list:
+						#print("dsnap.shape = ", dsnap.shape)
+						#print("normalisedSnapshots[0].shape = ", normalisedSnapshots[0].shape)
+						if(torch.equal(dsnap, normalisedSnapshots[0])):
+							print("exact duplicate snapshot being added to database")
+							dsnapSparse = dsnap.to_sparse_coo()
+							normalisedSnapshotSparse = normalisedSnapshots[0].to_sparse_coo()
+							print("dsnapSparse = ", dsnapSparse)
+							print("normalisedSnapshotSparse = ", normalisedSnapshotSparse)
 
+			y, classTargets = self.generateClassTargets(slidingWindowIndex, normalisedSnapshots, B1, seq_input)
+			
 			if(trainOrTest and not generateConnectionsAfterPropagating):	#debug only
 				self.addNormalisedSnapshotToDatabase(normalisedSnapshots, classTargets)
-				
+			
+			#sanity checks;
+			if(debugATNLPsnapshotDuplicates):
+				if(ATNLPsnapshotDatabaseRamDynamic and self.databaseRamDynamicInitialised):
+					self.count_exact_duplicates()
+
 			# -----------------------------
 			# Prediction
 			# -----------------------------
@@ -198,13 +226,16 @@ class ATNLPmodel(nn.Module):
 					valid_count = valid_mask.sum().item()
 					if valid_count > 0:
 						correct = ((predictions == y) & valid_mask).sum().item()
-						accuracyAllWindows += correct / valid_count
+						accuracy = correct / valid_count
 					else:
-						accuracyAllWindows += 0.0
+						accuracy = 0.0
 				else:
 					correct = (predictions == y).sum().item()
 					accuracy = correct / y.size(0)
-					accuracyAllWindows += accuracy
+				accuracyAllWindows += accuracy
+				
+				#if(debugATNLPnormalisation):
+				print("accuracy = ", accuracy)
 					
 			# -----------------------------
 			# Train
@@ -212,11 +243,30 @@ class ATNLPmodel(nn.Module):
 			if(trainOrTest and generateConnectionsAfterPropagating):
 				self.addNormalisedSnapshotToDatabase(normalisedSnapshots, classTargets)
 		
-		accuracy = accuracyAllWindows / numSubsamples
+		accuracy = accuracyAllWindows / numSubsamplesWithKeypoints
 		loss = Loss(0.0)
 		
 		return loss, accuracy
 
+	def removeInvalidNormalisedSnapshots(self, normalisedSnapshots, B1):
+		#remove invalid normalisedSnapshots (without keypoints);
+		B2 = normalisedSnapshots.shape[0]
+		S = B2 // B1
+		normalisedSnapshots = normalisedSnapshots.view(B1, S, C, L2)
+		normalisedSnapshots = normalisedSnapshots.permute(1, 0, 2, 3)        # now (S, B1, C, L2)
+		SnonZero = torch.count_nonzero(normalisedSnapshots, dim=(1,2,3))   # shape (S,)
+		mask = SnonZero > 0        # (S,) boolean
+		Snew = mask.sum().item()
+		#print("Snew = ", Snew)
+		normalisedSnapshots = normalisedSnapshots[mask]         # shape (S', B1, C, L2)
+		normalisedSnapshots = normalisedSnapshots.permute(1, 0, 2, 3)        # now (B1, S', C, L2)
+		normalisedSnapshots = normalisedSnapshots.view(B1*Snew, C, L2)
+		if(normalisedSnapshots.count_nonzero() == 0):
+			validSnapshotFound = False
+		else:
+			validSnapshotFound = True
+		return normalisedSnapshots, validSnapshotFound
+				
 	def addNormalisedSnapshotToDatabase(self, normalisedSnapshots, classTargets):
 		if(ATNLPsnapshotDatabaseDisk):
 			snapshotDatabaseWriter.add_batch(normalisedSnapshots, classTargets)
@@ -228,11 +278,17 @@ class ATNLPmodel(nn.Module):
 				self.databaseRamDynamicInitialised = True
 				self.database = normalisedSnapshots.to(ATNLPsnapshotDatabaseLoadDevice)
 				self.db_classes = classTargets.to(ATNLPsnapshotDatabaseLoadDevice)
-			if(normalisedSnapshotsSparseTensors):
+			if(ATNLPnormalisedSnapshotsSparseTensors):
 				self.database = self.database.coalesce()
 		elif(ATNLPsnapshotDatabaseRamStatic):
-			self.imgs_list.append(normalisedSnapshots.to(ATNLPsnapshotDatabaseLoadDevice).float())
-			self.cls_list.append(classTargets.to(ATNLPsnapshotDatabaseLoadDevice).int())
+			#self.imgs_list.append(normalisedSnapshots.to(ATNLPsnapshotDatabaseLoadDevice))	#.float()
+			#self.cls_list.append(classTargets.to(ATNLPsnapshotDatabaseLoadDevice))	#.int()
+			S = normalisedSnapshots.shape[0]
+			for s in range(S):
+				normalisedSnapshot = normalisedSnapshots[s]
+				classTarget = classTargets[s]
+				self.imgs_list.append(normalisedSnapshot)
+				self.cls_list.append(classTarget)
 					
 	def generateClassTargets(self, slidingWindowIndex, normalisedSnapshots, B1, seq_input):
 		#for now just predict final character in sequence window
@@ -290,58 +346,59 @@ class ATNLPmodel(nn.Module):
 			ids_per_char = bert_input_ids.gather(1, token_idx)			  # (B,Lc)
 			ids_per_char[no_cover] = pad_id
 			seq_input = ids_per_char
+			
+			#print("seq_input.shape = ", seq_input.shape)
 	
 		return seq_input
-			
 
-	def char_idx_to_spacy_idx(self,
-		spacy_offsets: torch.Tensor,   # (B, Ls, 2)  [char_start, char_end)
-		last_token_idx: torch.Tensor   # (B,) or scalar  character index
-	) -> torch.Tensor:				 # -> (B,)  token index within 0..Ls-1
+	if(debugATNLPsnapshotDuplicates):
+		def count_exact_duplicates(self) -> int:
+			"""
+			Returns the number of database rows that share the *same* feature vector
+			but carry *different* class labels.
 
-		"""
-		Parameters
-		----------
-		spacy_offsets  : (B, Ls, 2) long | int64
-			Offsets produced by spaCy's `Token.idx` and `Token.idx + len(tok) - 1`.
-			`spacy_offsets[b, t, 0]` \u2264 `spacy_offsets[b, t, 1]`.
-		last_token_idx : int  |  shape (B,) tensor
-			Character position that marks the 'current' / 'last' token.
-			If a scalar is supplied, the same char-index is used for every batch item.
+			Parameters
+			----------
+			db		  : (B3, C, L)  dense (Strided) **or** sparse COO tensor
+			db_classes  : (B3,)	   int64 / int32
+			"""
+			db = self.database
+			db_classes = self.db_classes
 
-		Returns
-		-------
-		last_spacy_token_idx : (B,) long
-			For each batch sample, the token index *t* whose span contains
-			`last_token_idx[b]`, i.e.
-			`spacy_offsets[b, t, 0] \u2264 last_token_idx[b] \u2264 spacy_offsets[b, t, 1]`.
-			If no span matches (shouldn\u2019t happen in valid data) the result is 0.
-		"""
-		B, Ls, _ = spacy_offsets.shape
-		device = spacy_offsets.device
-		dtype = spacy_offsets.dtype
+			B3 = db.shape[0]
 
-		# --- broadcast last_token_idx to shape (B,) ---------------------------- #
-		last_char = torch.full((B,), last_token_idx, dtype=dtype, device=device)
+			# -------- 1. build a stable hash per row --------------------------------
+			row_hashes = [""] * B3
 
-		# --- vectorised containment test  (B, Ls) ------------------------------ #
-		starts, ends = spacy_offsets[..., 0], spacy_offsets[..., 1]
-		mask = (last_char[:, None] >= starts) & (last_char[:, None] <= ends)
+			if db.is_sparse:
+				# Flatten once for indexing
+				flat = db.coalesce()
+				idx, val = flat.indices(), flat.values()	  # (3, nnz), (nnz,)
 
-		# --- convert boolean mask \u2192 index (first True along Ls) --------------- #
-		# `mask` is guaranteed to have at least one True per row in valid data.
-		last_spacy_token_idx = torch.argmax(mask.to(torch.int8), dim=1)
+				for b in range(B3):
+					mask = idx[0] == b
+					h = hashlib.md5()
+					h.update(idx[1:, mask].t().contiguous().cpu().numpy().tobytes())
+					h.update(val[mask].cpu().numpy().tobytes())
+					row_hashes[b] = h.hexdigest()
+			else:  # dense (\u201cStrided\u201d) layout
+				for b in range(B3):
+					h = hashlib.md5(db[b].cpu().numpy().tobytes()).hexdigest()
+					row_hashes[b] = h
 
-		# optional: assert validity during development
-		# assert mask.any(dim=1).all(), "some last_token_idx not inside any token span"
+			# -------- 2. group rows by hash and look for label conflicts ------------
+			buckets = defaultdict(list)
+			for i, h in enumerate(row_hashes):
+				buckets[h].append(i)
 
-		'''
-		print("char_idx_to_spacy_idx():")
-		print("last_token_idx = ", last_token_idx)
-		print("spacy_offsets = ", spacy_offsets)
-		print("last_spacy_token_idx = ", last_spacy_token_idx)
-		'''
-		
-		return last_spacy_token_idx	# (B,) long
-	
+			conflicts = 0
+			for rows in buckets.values():
+				if len(rows) > 1:
+					labels = db_classes[rows]
+					if labels.unique().numel() > 1:
+						conflicts += len(rows)
+
+			return conflicts
+
+
 

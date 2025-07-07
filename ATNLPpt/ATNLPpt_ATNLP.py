@@ -46,7 +46,7 @@ def createModel(dataset):
 		print("\t inputLayerSize (numberOfFeatures) = ", numberOfFeatures)
 		print("\t outputLayerSize (numberOfClasses) = ", numberOfClasses)
 		print("\t ---")
-		print("\t normalisedSnapshotsSparseTensors = ", normalisedSnapshotsSparseTensors)
+		print("\t ATNLPnormalisedSnapshotsSparseTensors = ", ATNLPnormalisedSnapshotsSparseTensors)
 		print("\t ATNLPcomparisonShiftInvariance = ", ATNLPcomparisonShiftInvariance)
 		print("\t ATNLPcomparisonShiftInvariancePixels = ", ATNLPcomparisonShiftInvariancePixels)
 		print("\t ATNLPsnapshotDatabaseDisk = ", ATNLPsnapshotDatabaseDisk)

@@ -49,6 +49,8 @@ def build_keypoints(
 	
 	for b in range(batchSize):
 		kp_indices, kp_meta = _detect_keypoints(spacy_pos[b], spacy_offsets[b])
+		kp_indices.reverse()
+		kp_meta.reverse()
 		kp_indices_batch.append(kp_indices)
 		kp_meta_batch.append(kp_meta)
 
@@ -89,23 +91,16 @@ def _detect_keypoints(spacy_pos: torch.Tensor, spacy_offsets: torch.Tensor) -> T
 	return kp_indices, kp_meta
 
 
-def append_keypoints_last_token(
-	last_spacy_token_idx: int,
-	kp_indices: List[int],
-	kp_meta: List[Dict] 
+def insert_keypoints_last_token(
+	last_token_idx_sample: int,
+	kp_use: List[int],
 ):
 	"""
 	Parameters
 	----------
-	last_spacy_token_idx: int			#last spacy token index at which to perform keypoint detection
-	kp_indices : token indices that are key-points
-	kp_meta	   : [{token_idx, pos, char_start, char_end}, ...]
+	last_token_idx_sample: int			#last spacy token index at which to perform keypoint detection]
 	"""
-	
-	if kp_indices[-1] != last_spacy_token_idx:
-		kp_indices.append(last_spacy_token_idx)
-		kp_meta[last_spacy_token_idx]["is_last_keypoint"] = True
-
+	kp_use.insert(0, last_token_idx_sample)
 
 # ------------------------------------------------------------------------- #
 # (3)  build key-point pairs for dev | train | eval modes				   #
@@ -137,18 +132,20 @@ def make_pairs(kp: List[int], mode: keypointModes, r: int, q: int) -> Tuple[torc
 	if mode == "allKeypointCombinations":
 		out = [(i, j) for idx_i, i in enumerate(kp) for j in kp[idx_i + 1:]]
 		pairs = torch.as_tensor(out, dtype=torch.long)
+		pairs = torch.sort(pairs, dim=1).values	# ensure i < j so downstream code always receives [start, end]
 		valid = torch.ones(len(out), dtype=torch.bool)
 		return pairs, valid
 
 	# ------------  b) last r adjacent pairs ---------------------- #
 	if mode == "firstKeypointConsecutivePairs":
 		adj = list(zip(kp[:-1], kp[1:]))			   # consecutive pairs
-		adj = adj[-r:]								 # last r pairs
+		adj = adj[:r]								 # keep the *first* r
 		valid_n = len(adj)
 		# zero-padding to fixed length r
 		pairs = torch.zeros(r, 2, dtype=torch.long)
 		if valid_n:
 			pairs[:valid_n] = torch.as_tensor(adj, dtype=torch.long)
+			pairs[:valid_n] = torch.sort(pairs[:valid_n], dim=1).values	# ensure i < j so downstream code always receives [start, end]
 		valid = torch.zeros(r, dtype=torch.bool)
 		valid[:valid_n] = True
 		return pairs, valid
@@ -156,11 +153,10 @@ def make_pairs(kp: List[int], mode: keypointModes, r: int, q: int) -> Tuple[torc
 	# ------------  c) last r starts, spans 2 -> q ------------------ #
 	if mode == "firstKeypointPairs":
 		out = []
-		starts = kp[-r:]								# last r starting kps
+		starts = kp[:r]								# first r starts
 		for s_idx, s in enumerate(starts):
 			# pick up to q-1 subsequent key-points
-			slice_end = len(kp) - (r - 1 - s_idx)	   # respect ordering
-			next_kps = kp[s_idx + len(kp) - r + 1 : slice_end][:q - 1]
+			next_kps = kp[s_idx + 1 : s_idx + 1 + (q - 1)]
 			if not next_kps:							# none available
 				out.extend([(0, 0)] * (q - 1))
 			else:
@@ -171,6 +167,7 @@ def make_pairs(kp: List[int], mode: keypointModes, r: int, q: int) -> Tuple[torc
 					else:
 						out.append((0, 0))
 		pairs = torch.as_tensor(out, dtype=torch.long)		  # (r*(q-1), 2)
+		pairs = torch.sort(pairs, dim=1).values	# ensure i < j so downstream code always receives [start, end]
 		valid = ~(pairs[:, 0] == pairs[:, 1])
 		return pairs, valid
 

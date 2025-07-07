@@ -21,8 +21,12 @@ import math
 from typing import Literal
 			
 printATNLPmodelProperties = True
+
 debugSequentialLoops = False
 debugATNLPnormalisation = False
+debugATNLPcomparison = False
+debugATNLPsnapshotDuplicates = False
+debugATNLPkeypoints = False
 
 useNLPDataset = True	#mandatory
 useNLPDatasetPaddingMask = True	#default: True	#not strictly required for wikipedia dataset and small sequence lengths, as it extracts only the first L tokens from each article
@@ -35,19 +39,23 @@ if pt.cuda.is_available():
 	deviceGPU = pt.device("cuda")
 deviceCPU = pt.device("cpu")
 
-normalisedSnapshotsSparseTensors = True	#optional	#required to perform image comparison against a database of any significant size at speed
-ATNLPcomparisonShiftInvariance = True	#default: True	#orig: False	#add redundancy to support incomplete alignment between candidate and database normalised snapshots
+ATNLPnormalisedSnapshotsSparseTensors = True	#optional	#required to perform image comparison against a database of any significant size at speed
+ATNLPcomparisonShiftInvariance = False	#default: True	#orig: False	#add redundancy to support incomplete alignment between candidate and database normalised snapshots
 ATNLPcomparisonShiftInvariancePixels = None
 if(ATNLPcomparisonShiftInvariance):
 	ATNLPcomparisonShiftInvariancePixels = 2
 
-generateConnectionsAfterPropagating = True	#default: True	#relevant for ATNLPsnapshotDatabaseRamDynamic only	#set to False for debug only - adds the current normalisedSnapshots to the self.database before executing compare_1d_batches() 
+if(debugATNLPcomparison):
+	generateConnectionsAfterPropagating = False
+	debugSkipFirstBatch = True	#temp	#skips the first dataset batch (sample) where batchSize=1 for debug, as this contains very few keypoints at start of sequence
+else:
+	generateConnectionsAfterPropagating = True	#default: True	#relevant for ATNLPsnapshotDatabaseRamDynamic only	#set to False for debug only - adds the current normalisedSnapshots to the self.database before executing compare_1d_batches() 
 
 ATNLPsnapshotDatabaseDisk = False	#slow and high capacity
 ATNLPsnapshotDatabaseRamDynamic = True	#slow and low capacity (but enables train predictions)	#continuously update database tensor (do not use intermediary python list)	#useful for debug (required for prediction performance during train)
 ATNLPsnapshotDatabaseRamStatic = False 	#fast and low capacity
 if(ATNLPsnapshotDatabaseDisk):
-	if(normalisedSnapshotsSparseTensors):
+	if(ATNLPnormalisedSnapshotsSparseTensors):
 		ATNLPsnapshotDatabaseDiskSetSize = False	#mandatory: False (non-h5 database)
 		ATNLPsnapshotDatabaseDiskChunkSize = 1000000
 		ATNLPsnapshotDatabaseDiskCompareChunks = True	#default: True: compare database chunks directly from disk (enables comparison of a much larger database than what can be loaded into ram simultaneously)
@@ -63,7 +71,7 @@ if(ATNLPsnapshotDatabaseDisk):
 	else:
 		ATNLPsnapshotCompareChunkSize = ATNLPsnapshotDatabaseDiskChunkSize	#CHECKTHIS
 		ATNLPsnapshotDatabaseLoadDevice = deviceCPU	#default: deviceCPU
-	if(normalisedSnapshotsSparseTensors):
+	if(ATNLPnormalisedSnapshotsSparseTensors):
 		ATNLPsnapshotDatabaseDiskSetSize = False	#mandatory: False	#sparse tensors require H5 database (dynamic) - only implementation available
 	else:
 		ATNLPsnapshotDatabaseDiskSetSize = False		#default: False	#else dynamic	#optional
@@ -93,12 +101,14 @@ if(useNLPcharacterInput):
 	useContinuousVarEncodeMethod = "onehot"	#just convert character id directly to onehot vector
 	useTokenEmbedding = False	#token embeddings are not used (one-hot vectors instead)
 	ATNLPcontinuousVarEncodingNumBits = NLPcharacterInputSetLen
-	contextSizeMax = 128*4	#default: 512	#production: 512*4	#assume approx 4 characters per BERT token
 else:
 	useContinuousVarEncodeMethod = "onehot"
 	useTokenEmbedding = False	#token embeddings are not used (one-hot vectors instead)
 	ATNLPcontinuousVarEncodingNumBits = bertNumberTokenTypes
-	contextSizeMax = 64	#default: 128	#production: 512	
+contextSizeMax = 128*4	#default: 512	#production: 512*4	#specified in characters	#assume approx 4 characters per BERT token
+contextSizeMaxCharacters = contextSizeMax	
+contextSizeMaxBertTokens = contextSizeMax//2	#safe only (max)	#average: //4	- wikipedia average token length
+contextSizeMaxSpacyTokens = contextSizeMax//2	#safe only (max)	#average: //6	- wikipedia average word length
 
 numberOfClasses = ATNLPcontinuousVarEncodingNumBits
 
@@ -112,7 +122,7 @@ C = ATNLPcontinuousVarEncodingNumBits	#vocabulary size
 
 #sequence length vars;
 L1 = sequenceLength
-L2 = 10	#normalisation length for each reference set
+L2 = 10	#default: 10	#normalisation length for each reference set
 
 #keypoint extraction vars;
 keypointModes = Literal["allKeypointCombinations", "firstKeypointConsecutivePairs", "firstKeypointPairs"]

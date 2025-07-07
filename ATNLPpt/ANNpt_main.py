@@ -196,6 +196,10 @@ def processDataset(trainOrTest, dataset, model):
 				loop = tqdm(loader, leave=True)
 				startTime = time.time()
 				for batchIndex, batch in enumerate(loop):
+					if(debugSkipFirstBatch):
+						if(batchIndex == 0):
+							continue	#DEBUG! skip batch with few keypoints at start of sequence
+					
 					if(enforceConfigBatchSize):
 						batchSizeTemp = model.deriveCurrentBatchSize(batch)
 						if(batchSizeTemp != model.config.batchSize): 

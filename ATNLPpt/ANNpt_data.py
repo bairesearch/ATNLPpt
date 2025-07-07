@@ -651,7 +651,7 @@ elif(useNLPDataset):
 				enc = bert_tokenizer(
 					texts,
 					truncation=True,
-					max_length=contextSizeMax,
+					max_length=contextSizeMaxBertTokens,
 					padding=False,
 					return_offsets_mapping=True,
 				)
@@ -662,7 +662,7 @@ elif(useNLPDataset):
 				if(useNLPDatasetMultipleTokenisationChar):
 					# --- characters ---
 					char_ids = [ _CHAR2ID[ch] for ch in (txt.lower() if useNLPcharacterInputBasic else txt)
-		            			 if ch in _CHAR2ID ][:contextSizeMax]
+		            			 if ch in _CHAR2ID ][:contextSizeMaxCharacters]
 					out["char_input_ids"].append(char_ids)
 				if(useNLPDatasetMultipleTokenisationBert):
 					# --- BERT ---
@@ -674,9 +674,9 @@ elif(useNLPDataset):
 					# Fit into signed-64 range so torch.tensor() never overflows
 					def to_int64(u):                                 # keep sign if already < 2^63
 						return u if u < (1 << 63) else u - (1 << 64) # two\u2019s-complement wrap
-					sp_ids = [to_int64(tok.lex_id) for tok in doc][:contextSizeMax]
-					sp_pos = [to_int64(tok.tag)    for tok in doc][:contextSizeMax]
-					sp_off = [ (tok.idx, tok.idx+len(tok)) for tok in doc ][:contextSizeMax]
+					sp_ids = [to_int64(tok.lex_id) for tok in doc][:contextSizeMaxSpacyTokens]
+					sp_pos = [to_int64(tok.tag)    for tok in doc][:contextSizeMaxSpacyTokens]
+					sp_off = [ (tok.idx, tok.idx+len(tok)) for tok in doc ][:contextSizeMaxSpacyTokens]
 					out["spacy_input_ids"].append(sp_ids)
 					out["spacy_pos"].append(sp_pos)
 					out["spacy_offsets"].append(sp_off)

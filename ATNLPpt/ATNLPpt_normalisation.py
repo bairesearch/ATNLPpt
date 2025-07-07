@@ -38,7 +38,6 @@ import ATNLPpt_keypoints
 from typing import List, Dict, Tuple, Literal
 NL_MODEL = spacy.load("en_core_web_sm", disable=("ner", "parser", "lemmatizer"))
 
-
 # ------------------------------------------------------------------------- #
 # (4)(5)(6)  batch crop + resize with ONE grid_sample call (no loops)	   #
 # ------------------------------------------------------------------------- #
@@ -47,7 +46,7 @@ def normalise_batch(
 	seq_tensor: torch.Tensor,		  # (B1, C, L1)
 	spacy_pos : torch.Tensor,		  # (B1, L1)
 	spacy_offsets : torch.Tensor,		  # (B1, L1, 2)
-	last_spacy_token_idx: int,
+	last_token_idx: int,
 	mode : keypointModes,
 	r : int,
 	q : int,
@@ -81,7 +80,7 @@ def normalise_batch(
 		
 		# Each samples has a designated 'last spacy token' index (corresponding to the spacy token encapsulating the prediction target bert token or character)
 		kp_indices, kp_meta = kp_indices_batch[b].copy(), kp_meta_batch[b].copy()
-		ATNLPpt_keypoints.append_keypoints_last_token(last_spacy_token_idx[b], kp_indices, kp_meta)
+		#ATNLPpt_keypoints.insert_keypoints_last_token(last_spacy_token_idx[b], kp_indices, kp_meta)
 
 		# ------------------------------------------------------------- #
 		# Convert token-level key-points -> character-level key-points  
@@ -89,9 +88,18 @@ def normalise_batch(
 		#   only build pairs from key-points strictly *before* the chosen last-token index
 		# ------------------------------------------------------------- #
 		character_offsets = spacy_offsets[b]		  # (Ls, 2) start/end
-		kp_use = [character_offsets[idx][0] for idx in kp_indices if idx < last_spacy_token_idx[b]]	
+		kp_use_spacy = [idx for idx in kp_indices if character_offsets[idx][0].item() < last_token_idx]	
+		kp_use = [character_offsets[idx][0].item() for idx in kp_indices if character_offsets[idx][0].item() < last_token_idx]	
 		
-		pairs, valid = ATNLPpt_keypoints.make_pairs(kp_use, mode, r, q)				 # upgrade 3
+		ATNLPpt_keypoints.insert_keypoints_last_token(last_token_idx, kp_use)
+		
+		pairs, valid = ATNLPpt_keypoints.make_pairs(kp_use, mode, r, q)
+		
+		if(debugATNLPkeypoints):
+			print("kp_use_spacy = ", kp_use_spacy)
+			print("kp_use = ", kp_use)
+			print("pairs = ", pairs)
+			print("valid = ", valid)
 		
 		if pairs.numel():							  # may be (0,2) in dev
 			all_pairs.append(pairs)
@@ -106,25 +114,24 @@ def normalise_batch(
 	src_ids = torch.cat(sample_idx, dim=0).to(device)		  # (B2,)
 	B2 = pairs.size(0)
 	
-	# ------------------  single pass crop + resize (no loops) -------------- #
-	# 1. build a sampling grid in [-1,1] for grid_sample
-	start = pairs[:, 0].unsqueeze(1).float()			# (B2,1)
-	end   = pairs[:, 1].unsqueeze(1).float()			# (B2,1)
-	lin   = torch.linspace(0, 1, L2, device=device).unsqueeze(0)  # (1,L2)
-	real  = start + (end - 1 - start) * lin			 # (B2,L2) original idx
-	grid_x = real / (L1 - 1) * 2 - 1
-	grid_y = torch.zeros_like(grid_x)				   # dummy height (H=1)
-	grid   = torch.stack((grid_y, grid_x), dim=-1)	   # (B2,L2,2)
-	grid   = grid.unsqueeze(1)						  # (B2,1,L2,2)   H_out=1
+	# ------------------  area-style crop + resize (no loops) --------------- #
+	# 1. gather the relevant rows from the source batch
+	src = seq_tensor[src_ids]							# (B2,C,L1)
 
-	# 2. gather the relevant rows from the source batch
-	src = seq_tensor[src_ids]						   # (B2,C,L1)
-	src = src.unsqueeze(2)							  # (B2,C,1,L1)
+	# 2. build a boolean mask for every crop span [start, end]
+	pos	= torch.arange(L1, device=device).view(1,1,L1)		# (1,1,L1)
+	start = pairs[:, 0].view(B2,1,1)						# (B2,1,1)
+	end	= pairs[:, 1].view(B2,1,1)						# (B2,1,1)
+	mask = (pos >= start) & (pos <= end)					# (B2,1,L1)
+	mask = mask.expand(-1, C, -1)						# (B2,C,L1)
 
-	# 3. sample
-	out = F.grid_sample(src, grid, mode="bilinear", align_corners=align_corners, padding_mode="zeros").squeeze(2)  # (B2,C,L2)
+	# 3. zero-out everything outside the span
+	seg = src.masked_fill(~mask, 0.0)					# (B2,C,L1)
 
-	# 4. zero-out the segments that were invalid (requirement 3 fallback)
+	# 4. area-style down-sampling: max over L2 equal-width bins
+	out = F.adaptive_avg_pool1d(seg, L2)				# (B2,C,L2)
+
+	# 5. zero-out the snapshots that were marked invalid
 	out[~valid] = 0
 
 	if(debugATNLPnormalisation):

@@ -27,7 +27,7 @@ if(ATNLPsnapshotDatabaseDisk):
 		import numpy as np
 
 if(not ATNLPcomparisonShiftInvariance):
-	if(normalisedSnapshotsSparseTensors):
+	if(ATNLPnormalisedSnapshotsSparseTensors):
 		def _cosine_block(
 				c_blk: torch.Tensor,   # sparse  (B_c, D)
 				d_blk: torch.Tensor,   # sparse  (B_d, D)
@@ -65,7 +65,7 @@ if(not ATNLPcomparisonShiftInvariance):
 				
 if(ATNLPsnapshotDatabaseDiskCompareChunks):
 	if(ATNLPcomparisonShiftInvariance):
-		if(normalisedSnapshotsSparseTensors):
+		if(ATNLPnormalisedSnapshotsSparseTensors):
 			# ===================================================================== #
 			#  STREAMING, OUT-OF-CORE VARIANT \u2013 loads DB from HDF5 in sparse chunks #
 			# ===================================================================== #
@@ -191,12 +191,7 @@ if(ATNLPsnapshotDatabaseDiskCompareChunks):
 				assert B2 % B1 == 0, "B2 must divide into snapshots"
 				S = B2 // B1
 
-				avg_sim = best_val.view(B1, S).mean(dim=1)			# (B1,)
-				top_cls = class_ds[best_idx.view(B1, S)[:, 0]]		# (B1,)
-
-				# ---- inexpensive \u201cunit_sim\u201d proxy (norm only) -----------------------
-				#unit_sim = (sumsq / (sumsq.sum(dim=1, keepdim=True) + eps)).sqrt()
-				unit_sim = torch.sqrt(sumsq + eps)		# shape (B2,)
+				unit_sim, top_cls, avg_sim = calculateTopCls(eps, db_classes, sumsq, best_val, best_idx, B1, B2, B3, S)			
 
 				return unit_sim, top_cls, avg_sim
 		else:
@@ -266,16 +261,12 @@ if(ATNLPsnapshotDatabaseDiskCompareChunks):
 				assert B2 % B1 == 0
 				S = B2 // B1
 
-				avg_sim = best_val.view(B1, S).mean(dim=1)
-				top_cls = class_ds[best_idx.view(B1, S)[:, 0]]
-
-				#unit_sim = (sumsq / (sumsq.sum(dim=1, keepdim=True) + eps)).sqrt()
-				unit_sim = torch.sqrt(sumsq + eps)		# shape (B2,)
+				unit_sim, top_cls, avg_sim = calculateTopCls(eps, db_classes, sumsq, best_val, best_idx, B1, B2, B3, S)			
 				
 				return unit_sim, top_cls, avg_sim
 
 	else:
-		if(normalisedSnapshotsSparseTensors):
+		if(ATNLPnormalisedSnapshotsSparseTensors):
 
 			def compare_1d_batches_stream_db(
 				candidates: torch.Tensor,			# (B2, C, L)  sparse
@@ -390,20 +381,8 @@ if(ATNLPsnapshotDatabaseDiskCompareChunks):
 				assert B2 % B1 == 0, "B2 must be a multiple of base_batch"
 				S = B2 // B1
 
-				avg_sim = best_val.view(B1, S).mean(dim=1)			# (B1,)
-				top_cls = class_ds[best_idx.view(B1, S)[:, 0]]		# (B1,)
-
-				# ---- build L2-unit similarity vectors if you need them --------------
-				#unit_sim = (sumsq / (sumsq.sum(dim=1, keepdim=True) + eps)).sqrt()
-				unit_sim = torch.sqrt(sumsq + eps)		# shape (B2,)
+				unit_sim, top_cls, avg_sim = calculateTopCls(eps, db_classes, sumsq, best_val, best_idx, B1, B2, B3, S)
 				
-				#  NOTE: the above gives you only the *norm* part.  Reconstructing the
-				#  full (B2, B3) vector requires either: (a) a second DB pass that
-				#  writes into a memory-mapped array, or (b) storing all sim blocks on
-				#  disk.  Most users never actually need the entire vector, only the
-				#  top-k scores.  If you do need it, ask and I\u2019ll show option (a) with
-				#  numpy.memmap.
-
 				return unit_sim, top_cls, avg_sim
 		else:
 			# ====================================================================== #
@@ -457,11 +436,7 @@ if(ATNLPsnapshotDatabaseDiskCompareChunks):
 				assert B2 % B1 == 0, "B2 must divide into snapshots"
 				S = B2 // B1
 
-				avg_sim = best_val.view(B1, S).mean(dim=1)				# (B1,)
-				top_cls = class_ds[best_idx.view(B1, S)[:, 0]]			# (B1,)
-
-				#unit_sim = (sumsq / (sumsq.sum(dim=1, keepdim=True) + eps)).sqrt()
-				unit_sim = torch.sqrt(sumsq + eps)		# shape (B2,)
+				unit_sim, top_cls, avg_sim = calculateTopCls(eps, db_classes, sumsq, best_val, best_idx, B1, B2, B3, S)
 				
 				return unit_sim, top_cls, avg_sim
 
@@ -496,7 +471,7 @@ else:
 			idx0	   = L - 1								 # zero-shift index
 			low, high  = idx0 - K, idx0 + K + 1				# slice bounds
 
-			if(normalisedSnapshotsSparseTensors):
+			if(ATNLPnormalisedSnapshotsSparseTensors):
 				# NOTE: torch.fft.* does **not** support sparse tensors.  Replace the
 				# FFT-based pipeline with explicit index-matching cross-correlation.
 
@@ -591,19 +566,15 @@ else:
 
 				sim = torch.cat(sim_rows, dim=1)									# (B2, B3)
 
-			unit_sim = F.normalize(sim, p=2, dim=1, eps=eps)					# (B2, B3)
-
-			# --- aggregate over snapshots -------------------------------------------
+			# --- aggregate over S snapshots per logical sample -----------------------
 			B2, B3 = sim.shape
 			assert B2 % B1 == 0, "B2 must be a multiple of base_batch"
-			S = B2 // B1
-
-			mean_sim = sim.view(B1, S, B3).mean(dim=1)		  # (B1, B3)
-			best_vals, best_idx = mean_sim.max(dim=1)		   # (B1,)
-
-			top_cls  = db_classes[best_idx]					  # (B1,)
-			avg_sim  = best_vals								 # (B1,)
-
+			S = B2 // B1								   # snapshots per sample
+		
+			#assume sim.shape = (B2, B3)
+			B2sim_vals, B2sim_ids = torch.max(sim, dim=1)	# (B2)
+			unit_sim, top_cls, avg_sim = calculateTopCls(eps, db_classes, sim, B2sim_vals, B2sim_ids, B1, B2, B3, S)
+			
 			return unit_sim, top_cls, avg_sim
 
 	else:
@@ -649,11 +620,11 @@ else:
 			database   = database.to(ATNLPsnapshotDatabaseLoadDevice, dtype=torch.float32)
 			db_classes = db_classes.to(device)
 
-			B2, C, L   = candidates.shape
+			B2, C, L = candidates.shape
 			B3, C2, L2 = database.shape
 			assert C == C2 and L == L2, "Candidates and database must have identical C and L"
 
-			if(normalisedSnapshotsSparseTensors):
+			if(ATNLPnormalisedSnapshotsSparseTensors):
 				## ---- flatten to 2-D *sparse* feature matrices --------------------------
 				#cand_feat = candidates.reshape(B2, -1).coalesce()		# (B2, D) - sparse	# GPU
 				#db_feat	= database.reshape(B3, -1).coalesce()		# (B3, D) - sparse	# CPU
@@ -700,22 +671,56 @@ else:
 			# ---------------------------------------------------------------------- #
 			# 3. convert each row into a **unit similarity vector** (L2 = 1).		#
 			# ---------------------------------------------------------------------- #
-			unit_sim = F.normalize(sim, p=2, dim=1, eps=eps)		   # (B2, B3)
-
 			# --- aggregate over S snapshots per logical sample -----------------------
 			B2, B3 = sim.shape
 			assert B2 % B1 == 0, "B2 must be a multiple of base_batch"
 			S	  = B2 // B1								   # snapshots per sample
-
-			mean_sim = sim.view(B1, S, B3).mean(dim=1)		  # (B1, B3)
-			best_vals, best_idx = mean_sim.max(dim=1)		   # (B1,)
-
-			top_cls = db_classes[best_idx]					  # (B1,)
-			avg_sim = best_vals								 # (B1,)
-
+		
+			#assume sim.shape = (B2, B3)
+			B2sim_vals, B2sim_ids = torch.max(sim, dim=1)	# (B2)
+			unit_sim, top_cls, avg_sim = calculateTopCls(eps, db_classes, sim, B2sim_vals, B2sim_ids, B1, B2, B3, S)
+			
 			return unit_sim, top_cls, avg_sim
+
+def calculateTopCls(eps, db_classes, sim, B2sim_vals, B2sim_ids, B1, B2, B3, S):
+
+	if(debugATNLPcomparison):
+		exact_mask = sim > 0.99999          # tweak threshold if needed
+		rows, cols = exact_mask.nonzero(as_tuple=True)
+		print("Exact-like hits:", len(rows))
+		print(" rows[:10] =", rows[:10].tolist())
+		print(" cols[:10] =", cols[:10].tolist())
+		if len(rows):
+			print(" classes @ cols[:10] =", db_classes[cols[:10]].tolist())
+
+	#equivalent to previous methods;
+	B2sim_vals = B2sim_vals.view(B1, S)		# (B1, S)
+	B2sim_ids = B2sim_ids.view(B1, S)		# (B1, S)
+	# --- aggregate across S snapshots -----------------------------------
+	# (1) average similarity per logical sample
+	B1sim_vals = B2sim_vals.mean(dim=1)						# (B1)
+	# (2) take the DB index of the snapshot with the highest similarity
+	max_idx_in_S = B2sim_vals.argmax(dim=1)					# (B1)
+	B1sim_ids = B2sim_ids[torch.arange(B1, device=B2sim_ids.device), max_idx_in_S]	# (B1)
+	top_cls = db_classes[B1sim_ids]					  # (B1)
+	avg_sim = B1sim_vals	  # (B1)
+	
+	if(ATNLPsnapshotDatabaseDiskCompareChunks):
+		sumsq = sim
+		# ---- inexpensive \u201cunit_sim\u201d proxy (norm only) -----------------------
+		#unit_sim = (sumsq / (sumsq.sum(dim=1, keepdim=True) + eps)).sqrt()
+		unit_sim = torch.sqrt(sumsq + eps)		# shape (B2,)
+
+		#  NOTE: the above gives you only the *norm* part.  Reconstructing the
+		#  full (B2, B3) vector requires either: (a) a second DB pass that
+		#  writes into a memory-mapped array, or (b) storing all sim blocks on
+		#  disk.  Most users never actually need the entire vector, only the
+		#  top-k scores.  If you do need it, ask and I\u2019ll show option (a) with
+		#  numpy.memmap.
+	else:
+		unit_sim = F.normalize(sim, p=2, dim=1, eps=eps)					# (B2, B3)
 
 
 	
-
-
+	return unit_sim, top_cls, avg_sim
+	
