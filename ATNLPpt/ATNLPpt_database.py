@@ -204,59 +204,35 @@ if(ATNLPsnapshotDatabaseDisk):
 elif(ATNLPsnapshotDatabaseRamStatic):
 	def finaliseTrainedSnapshotDatabase(self):
 		if(ATNLPnormalisedSnapshotsSparseTensors):
-			#dense_imgs = [img.to_dense() for img in self.imgs_list]
-			#self.database = torch.cat(dense_imgs).to_sparse_coo()  # (B3, C, L) sparse
+			# Channel/length are constant across images (each list item is a single (C,L) snapshot)
+			C, L = self.imgs_list[0].shape
 
-			"""
-			imgs_list holds *(Bi, C, L)* sparse COO blocks gathered on-the-fly.
-			We concatenate them along the batch dimension **without ever
-			materialising a dense tensor**.
-			"""
-			if not self.imgs_list:
-				raise RuntimeError("imgs_list is empty")
+			indices_cat, values_cat = [], []
 
-			# Channel/length are constant across batches
-			C, L = self.imgs_list[0].shape[1:]
+			for b, img in enumerate(self.imgs_list):			# one snapshot per list item
 
-			indices_cat = []
-			values_cat  = []
-			offset	  = 0					   # running batch offset
+				assert img.shape == (C, L), "shape mismatch in imgs_list"
 
-			for blk in self.imgs_list:
-				# Ensure sparse COO
-				if not blk.is_sparse:
-					blk = blk.to_sparse_coo()
+				idx2d = img.indices()							# (2, nnz)
+				val2d = img.values()							# (nnz,)
 
-				# Sanity check
-				assert blk.shape[1:] == (C, L), "shape mismatch in imgs_list"
+				batch_row = torch.full((1, idx2d.size(1)), b, dtype=idx2d.dtype, device=idx2d.device)
+				idx3d = torch.cat([batch_row, idx2d], dim=0)	# (3, nnz)
 
-				idx = blk.indices()			   # (3, nnz_blk)
-				val = blk.values()				# (nnz_blk,)
+				indices_cat.append(idx3d)
+				values_cat.append(val2d)
 
-				# Shift batch dimension by cumulative offset
-				idx_shifted	   = idx.clone()
-				idx_shifted[0, :] += offset
-
-				indices_cat.append(idx_shifted)
-				values_cat.append(val)
-
-				offset += blk.shape[0]			# advance for next block
-
-			# Concatenate all non-zeros
-			indices_all = torch.cat(indices_cat, dim=1)   # (3, total_nnz)
-			values_all  = torch.cat(values_cat,  dim=0)   # (total_nnz,)
+			# Assemble final sparse (B3,C,L)
+			indices_all = torch.cat(indices_cat, dim=1)
+			values_all  = torch.cat(values_cat, dim=0)
 
 			self.database = torch.sparse_coo_tensor(
-				indices_all,
-				values_all,
-				size=(offset, C, L),			  # final (B3, C, L)
-				dtype=values_all.dtype,
-				device=values_all.device,
-			).coalesce()						  # canonical ordering / dedup
+				indices_all, values_all,
+				size=(len(self.imgs_list), C, L),
+				dtype=values_all.dtype, device=values_all.device
+			).coalesce()
 		else:
-			#self.database = torch.cat(self.imgs_list)		# (B3, C, L)
 			self.database = torch.stack(self.imgs_list)		# (B3, C, L)
-		#self.db_classes = torch.cat(self.cls_list)		 # (B3,)
 		self.db_classes = torch.stack(self.cls_list)		 # (B3,)
 		self.database = self.database.to(ATNLPsnapshotDatabaseLoadDevice)
 		self.db_classes = self.db_classes.to(ATNLPsnapshotDatabaseLoadDevice)

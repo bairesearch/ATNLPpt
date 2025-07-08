@@ -191,7 +191,7 @@ if(ATNLPsnapshotDatabaseDiskCompareChunks):
 				assert B2 % B1 == 0, "B2 must divide into snapshots"
 				S = B2 // B1
 
-				unit_sim, top_cls, avg_sim = calculateTopCls(eps, db_classes, sumsq, best_val, best_idx, B1, B2, B3, S)			
+				unit_sim, top_cls, avg_sim = calculateTopCls(eps, class_ds, sumsq, best_val, best_idx, B1, B2, B3, S)			
 
 				return unit_sim, top_cls, avg_sim
 		else:
@@ -261,7 +261,7 @@ if(ATNLPsnapshotDatabaseDiskCompareChunks):
 				assert B2 % B1 == 0
 				S = B2 // B1
 
-				unit_sim, top_cls, avg_sim = calculateTopCls(eps, db_classes, sumsq, best_val, best_idx, B1, B2, B3, S)			
+				unit_sim, top_cls, avg_sim = calculateTopCls(eps, class_ds, sumsq, best_val, best_idx, B1, B2, B3, S)			
 				
 				return unit_sim, top_cls, avg_sim
 
@@ -381,7 +381,7 @@ if(ATNLPsnapshotDatabaseDiskCompareChunks):
 				assert B2 % B1 == 0, "B2 must be a multiple of base_batch"
 				S = B2 // B1
 
-				unit_sim, top_cls, avg_sim = calculateTopCls(eps, db_classes, sumsq, best_val, best_idx, B1, B2, B3, S)
+				unit_sim, top_cls, avg_sim = calculateTopCls(eps, class_ds, sumsq, best_val, best_idx, B1, B2, B3, S)
 				
 				return unit_sim, top_cls, avg_sim
 		else:
@@ -436,7 +436,7 @@ if(ATNLPsnapshotDatabaseDiskCompareChunks):
 				assert B2 % B1 == 0, "B2 must divide into snapshots"
 				S = B2 // B1
 
-				unit_sim, top_cls, avg_sim = calculateTopCls(eps, db_classes, sumsq, best_val, best_idx, B1, B2, B3, S)
+				unit_sim, top_cls, avg_sim = calculateTopCls(eps, class_ds, sumsq, best_val, best_idx, B1, B2, B3, S)
 				
 				return unit_sim, top_cls, avg_sim
 
@@ -719,8 +719,6 @@ def calculateTopCls(eps, db_classes, sim, B2sim_vals, B2sim_ids, B1, B2, B3, S):
 		#  numpy.memmap.
 	else:
 		unit_sim = F.normalize(sim, p=2, dim=1, eps=eps)					# (B2, B3)
-
-
 	
 	return unit_sim, top_cls, avg_sim
 	

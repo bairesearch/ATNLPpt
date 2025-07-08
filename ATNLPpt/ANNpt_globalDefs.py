@@ -406,8 +406,12 @@ elif(useImageDataset):
 	dropoutProb = 0.5 	#default: 0.5	#orig: 0.3
 elif(useNLPDataset):
 	datasetSizeSubset = True	#default: True (required for stateTestDataset)  #if(useSequentialSANI): hiddenLayerSizeSANI is dynamically grown, and is not dependent on datasetSize (which can therefore be huge), however a) useDatasetSubset is still useful for fast training (development/debugging) and b) is required to reserve data for an eval phase 
-	datasetSizeSubsetName = "small"
-	if(datasetSizeSubsetName=="small"):
+	datasetSizeSubsetName = "tiny"
+	if(datasetSizeSubsetName=="tiny"):
+		datasetTrainRows = 16
+		datasetTestRows = int(datasetTrainRows*0.5)
+		batchSize = 2
+	elif(datasetSizeSubsetName=="small"):
 		datasetTrainRows = 128
 		datasetTestRows = int(datasetTrainRows*0.5)
 		batchSize = 16	#default: 16

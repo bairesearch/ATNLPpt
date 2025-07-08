@@ -49,10 +49,12 @@ class Loss:
 		return self._value
 
 if(ATNLPsnapshotDatabaseDisk):
-	if(ATNLPsnapshotDatabaseDiskSetSize):
-		snapshotDatabaseWriter = ATNLPpt_database.DBWriter(datasetTrainRows*B2train, C, L2)
-	else:
-		snapshotDatabaseWriter = ATNLPpt_database.H5DBWriter(C, L2)
+	def initialiseSnapshotDatabaseWriter():
+		global snapshotDatabaseWriter
+		if(ATNLPsnapshotDatabaseDiskSetSize):
+			snapshotDatabaseWriter = ATNLPpt_database.DBWriter(datasetTrainRows*B2train, C, L2)
+		else:
+			snapshotDatabaseWriter = ATNLPpt_database.H5DBWriter(C, L2)
 	
 # -------------------------------------------------------------
 # Core network module
@@ -73,12 +75,12 @@ class ATNLPmodel(nn.Module):
 		# database declaration
 		# -----------------------------
 		if(ATNLPsnapshotDatabaseDisk):
-			pass
+			initialiseSnapshotDatabaseWriter()
 		elif(ATNLPsnapshotDatabaseRamDynamic):
 			self.databaseRamDynamicInitialised = False
 		elif(ATNLPsnapshotDatabaseRamStatic):
 			self.imgs_list, self.cls_list = [], []
-		
+			
 	def deriveCurrentBatchSize(self, batch):
 		(x, y) = batch
 		if useNLPDatasetMultipleTokenisation:
@@ -252,7 +254,7 @@ class ATNLPmodel(nn.Module):
 		#remove invalid normalisedSnapshots (without keypoints);
 		B2 = normalisedSnapshots.shape[0]
 		S = B2 // B1
-		normalisedSnapshots = normalisedSnapshots.view(B1, S, C, L2)
+		normalisedSnapshots = normalisedSnapshots.reshape(B1, S, C, L2)
 		normalisedSnapshots = normalisedSnapshots.permute(1, 0, 2, 3)        # now (S, B1, C, L2)
 		SnonZero = torch.count_nonzero(normalisedSnapshots, dim=(1,2,3))   # shape (S,)
 		mask = SnonZero > 0        # (S,) boolean
@@ -260,7 +262,7 @@ class ATNLPmodel(nn.Module):
 		#print("Snew = ", Snew)
 		normalisedSnapshots = normalisedSnapshots[mask]         # shape (S', B1, C, L2)
 		normalisedSnapshots = normalisedSnapshots.permute(1, 0, 2, 3)        # now (B1, S', C, L2)
-		normalisedSnapshots = normalisedSnapshots.view(B1*Snew, C, L2)
+		normalisedSnapshots = normalisedSnapshots.reshape(B1*Snew, C, L2)
 		if(normalisedSnapshots.count_nonzero() == 0):
 			validSnapshotFound = False
 		else:
@@ -281,11 +283,10 @@ class ATNLPmodel(nn.Module):
 			if(ATNLPnormalisedSnapshotsSparseTensors):
 				self.database = self.database.coalesce()
 		elif(ATNLPsnapshotDatabaseRamStatic):
-			#self.imgs_list.append(normalisedSnapshots.to(ATNLPsnapshotDatabaseLoadDevice))	#.float()
-			#self.cls_list.append(classTargets.to(ATNLPsnapshotDatabaseLoadDevice))	#.int()
 			S = normalisedSnapshots.shape[0]
 			for s in range(S):
 				normalisedSnapshot = normalisedSnapshots[s]
+				normalisedSnapshot = normalisedSnapshot.coalesce()
 				classTarget = classTargets[s]
 				self.imgs_list.append(normalisedSnapshot)
 				self.cls_list.append(classTarget)
