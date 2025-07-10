@@ -50,12 +50,10 @@ class Loss:
 
 if(ATNLPsnapshotDatabaseDisk):
 	def initialiseSnapshotDatabaseWriter():
-		global snapshotDatabaseWriter
-		if(ATNLPsnapshotDatabaseDiskSetSize):
-			snapshotDatabaseWriter = ATNLPpt_database.DBWriter(datasetTrainRows*B2train, C, L2)
-		else:
-			snapshotDatabaseWriter = ATNLPpt_database.H5DBWriter(C, L2)
-	
+		#numberOfReferenceSetDelimiterIDs = 1 + len(ATNLPpt_keypoints.verb_dict)	#sync with referenceSetPosDelimitersTagStr
+		#snapshotDatabaseInitialisedList = [[False for _ in range(S)] for _ in range(numberOfReferenceSetDelimiterIDs)]
+		snapshotDatabaseWriters = [[None for _ in range(S)] for _ in range(B1)]
+		
 # -------------------------------------------------------------
 # Core network module
 # -------------------------------------------------------------
@@ -76,11 +74,15 @@ class ATNLPmodel(nn.Module):
 		# -----------------------------
 		if(ATNLPsnapshotDatabaseDisk):
 			initialiseSnapshotDatabaseWriter()
-		elif(ATNLPsnapshotDatabaseRamDynamic):
-			self.databaseRamDynamicInitialised = False
-		elif(ATNLPsnapshotDatabaseRamStatic):
-			self.imgs_list, self.cls_list = [], []
-			
+		elif(ATNLPsnapshotDatabaseRam):
+			referenceSetDelimiterIDmax = self.getReferenceSetDelimiterIDmax()
+			print("referenceSetDelimiterIDmax = ", referenceSetDelimiterIDmax)
+			print("S = ", S)
+			self.normalisedSnapshot_list = [[[] for _ in range(S)] for _ in range(referenceSetDelimiterIDmax)]
+			self.classTarget_list = [[[] for _ in range(S)] for _ in range(referenceSetDelimiterIDmax)]
+			self.database = [[None for _ in range(S)] for _ in range(referenceSetDelimiterIDmax)]
+			self.db_classes = [[None for _ in range(S)] for _ in range(referenceSetDelimiterIDmax)]
+					
 	def deriveCurrentBatchSize(self, batch):
 		(x, y) = batch
 		if useNLPDatasetMultipleTokenisation:
@@ -135,6 +137,7 @@ class ATNLPmodel(nn.Module):
 				extra = contextSizeMax - lengths					# [B1]
 			else:
 				numSubsamples = contextSizeMax
+			referenceSetsFirstDelimiterPrevious = None
 		else:
 			numSubsamples = 1
 	
@@ -147,9 +150,7 @@ class ATNLPmodel(nn.Module):
 		seq_input_encoded = seq_input_encoded.reshape(B1, L1, C)	 #shape (B1, L1, C)
 		seq_input_encoded = seq_input_encoded.permute(0, 2, 1)	 #shape (B1, C, L1)
 
-		spacy_pos = x['spacy_pos']
-		spacy_offsets = x['spacy_offsets']
-		kp_indices_batch, kp_meta_batch = ATNLPpt_keypoints.build_keypoints(spacy_pos, spacy_offsets)
+		kp_indices_batch, kp_meta_batch = ATNLPpt_keypoints.build_keypoints(x['spacy_input_ids'], x['spacy_pos'], x['spacy_tag'], x['spacy_offsets'])
 		if(debugATNLPkeypoints):
 			print("kp_indices_batch = ", kp_indices_batch)
 		
@@ -163,144 +164,158 @@ class ATNLPmodel(nn.Module):
 			# -----------------------------
 			# Transformation (normalisation)
 			# -----------------------------
-			if(trainOrTest):
-				mode=keypointModeTrain
-			else:
-				mode=keypointModeTest
-			
 			last_token_idx = slidingWindowIndex
-			normalisedSnapshots = ATNLPpt_normalisation.normalise_batch(seq_input_encoded, x['spacy_pos'], x['spacy_offsets'], last_token_idx, mode=mode, r=r, q=q, L2=L2, kp_indices_batch=kp_indices_batch, kp_meta_batch=kp_meta_batch)
+			normalisedSnapshots, keypointPairsIndicesFirst = ATNLPpt_normalisation.normalise_batch(seq_input_encoded, x['spacy_pos'], x['spacy_offsets'], last_token_idx, mode=keypointMode, r=r, q=q, L2=L2, kp_indices_batch=kp_indices_batch, kp_meta_batch=kp_meta_batch)
 			if(debugATNLPnormalisation):
 				print("seq_input_encoded = ", seq_input_encoded)	
 				print("normalisedSnapshots = ", normalisedSnapshots)
 				print("normalisedSnapshots.count_nonzero() = ", normalisedSnapshots.count_nonzero())
 			
-			normalisedSnapshots, validSnapshotFound = self.removeInvalidNormalisedSnapshots(normalisedSnapshots, B1)
-			if(validSnapshotFound):
-				#print("validSnapshotFound")
+			if(self.detectValidNormalisedSnapshot(normalisedSnapshots)):
 				numSubsamplesWithKeypoints += 1
 			else:
 				continue
 			
-			if(ATNLPnormalisedSnapshotsSparseTensors):
-				normalisedSnapshots = normalisedSnapshots.to_sparse_coo()
-				normalisedSnapshots = normalisedSnapshots.coalesce()	
-
-			#sanity checks;
-			if(debugATNLPsnapshotDuplicates):
-				if(ATNLPsnapshotDatabaseRamStatic):
-					for dsnap in self.imgs_list:
-						#print("dsnap.shape = ", dsnap.shape)
-						#print("normalisedSnapshots[0].shape = ", normalisedSnapshots[0].shape)
-						if(torch.equal(dsnap, normalisedSnapshots[0])):
-							print("exact duplicate snapshot being added to database")
-							dsnapSparse = dsnap.to_sparse_coo()
-							normalisedSnapshotSparse = normalisedSnapshots[0].to_sparse_coo()
-							print("dsnapSparse = ", dsnapSparse)
-							print("normalisedSnapshotSparse = ", normalisedSnapshotSparse)
+			normalisedSnapshots = normalisedSnapshots.to_sparse_coo()
+			normalisedSnapshots = normalisedSnapshots.coalesce()
 
 			y, classTargets = self.generateClassTargets(slidingWindowIndex, normalisedSnapshots, B1, seq_input)
 			
 			if(trainOrTest and not generateConnectionsAfterPropagating):	#debug only
-				self.addNormalisedSnapshotToDatabase(normalisedSnapshots, classTargets)
-			
-			#sanity checks;
-			if(debugATNLPsnapshotDuplicates):
-				if(ATNLPsnapshotDatabaseRamDynamic and self.databaseRamDynamicInitialised):
-					self.count_exact_duplicates()
-
+				self.addNormalisedSnapshotToDatabase(normalisedSnapshots, classTargets, keypointPairsIndicesFirst, referenceSetsFirstDelimiterPrevious, kp_meta_batch)
+				if(ATNLPsnapshotDatabaseRamDynamic):
+					ATNLPpt_database.finaliseTrainedSnapshotDatabase(self)
+				
 			# -----------------------------
 			# Prediction
 			# -----------------------------
-			if(not trainOrTest or (ATNLPsnapshotDatabaseRamDynamic and self.databaseRamDynamicInitialised)):
+			if(not trainOrTest or ATNLPsnapshotDatabaseRamDynamic):
 				if(ATNLPsnapshotDatabaseDiskCompareChunks):
-					unit_sim, top_cls, avg_sim = ATNLPpt_comparison.compare_1d_batches_stream_db(normalisedSnapshots, snapshotDatabaseName, B1, chunk_nnz=ATNLPsnapshotDatabaseDiskCompareChunksSize, device=device, shiftInvariantPixels=ATNLPcomparisonShiftInvariancePixels)
+					comparisonFound, unit_sim, top_cls, avg_sim = ATNLPpt_comparison.compare_1d_batches_stream_db(self, normalisedSnapshots, B1, keypointPairsIndicesFirst, kp_meta_batch, chunk_nnz=ATNLPsnapshotDatabaseDiskCompareChunksSize, device=device, shiftInvariantPixels=ATNLPcomparisonShiftInvariancePixels)
 				else:
-					#print("self.database = ", self.database)	#does not support useLovelyTensors
-					#print("self.db_classes = ", self.db_classes)	#does not support useLovelyTensors
-					unit_sim, top_cls, avg_sim = ATNLPpt_comparison.compare_1d_batches(normalisedSnapshots, self.database, self.db_classes, B1, chunk=ATNLPsnapshotCompareChunkSize, device=device, shiftInvariantPixels=ATNLPcomparisonShiftInvariancePixels)
-				predictions = top_cls
+					comparisonFound, unit_sim, top_cls, avg_sim = ATNLPpt_comparison.compare_1d_batches(self, normalisedSnapshots, B1, keypointPairsIndicesFirst, kp_meta_batch, chunk=ATNLPsnapshotCompareChunkSize, device=device, shiftInvariantPixels=ATNLPcomparisonShiftInvariancePixels)
 				
-				# count how many are exactly correct
-				if(useNLPDatasetPaddingMask):
-					#print("y = ", y)
-					valid_mask = (y != NLPcharacterInputPadTokenID)
-					valid_count = valid_mask.sum().item()
-					if valid_count > 0:
-						correct = ((predictions == y) & valid_mask).sum().item()
-						accuracy = correct / valid_count
+				if(comparisonFound):
+					predictions = top_cls
+					# count how many are exactly correct
+					if(useNLPDatasetPaddingMask):
+						#print("y = ", y)
+						valid_mask = (y != NLPcharacterInputPadTokenID)
+						valid_count = valid_mask.sum().item()
+						if valid_count > 0:
+							correct = ((predictions == y) & valid_mask).sum().item()
+							accuracy = correct / valid_count
+						else:
+							accuracy = 0.0
 					else:
-						accuracy = 0.0
-				else:
-					correct = (predictions == y).sum().item()
-					accuracy = correct / y.size(0)
-				accuracyAllWindows += accuracy
-				
-				#if(debugATNLPnormalisation):
-				print("accuracy = ", accuracy)
+						correct = (predictions == y).sum().item()
+						accuracy = correct / y.size(0)
+					accuracyAllWindows += accuracy
+
+					#if(debugATNLPnormalisation):
+					print("accuracy = ", accuracy)
 					
 			# -----------------------------
 			# Train
 			# -----------------------------
 			if(trainOrTest and generateConnectionsAfterPropagating):
-				self.addNormalisedSnapshotToDatabase(normalisedSnapshots, classTargets)
+				self.addNormalisedSnapshotToDatabase(normalisedSnapshots, classTargets, keypointPairsIndicesFirst, referenceSetsFirstDelimiterPrevious, kp_meta_batch)
 		
+			referenceSetsFirstDelimiterPrevious = keypointPairsIndicesFirst
+			
 		accuracy = accuracyAllWindows / numSubsamplesWithKeypoints
 		loss = Loss(0.0)
 		
 		return loss, accuracy
+	
+	def getReferenceSetDelimiterIDmax(self):
+		referenceSetDelimiterIDmax = 0
+		referenceSetDelimiterIDmax += 1	#"."
+		referenceSetDelimiterIDmax += len(ATNLPpt_keypoints.verb_dict)
+		#referenceSetDelimiterIDmax += len(ATNLPpt_keypoints.prep_dict)
+		return referenceSetDelimiterIDmax
 
-	def removeInvalidNormalisedSnapshots(self, normalisedSnapshots, B1):
-		#remove invalid normalisedSnapshots (without keypoints);
-		B2 = normalisedSnapshots.shape[0]
-		S = B2 // B1
-		normalisedSnapshots = normalisedSnapshots.reshape(B1, S, C, L2)
-		normalisedSnapshots = normalisedSnapshots.permute(1, 0, 2, 3)        # now (S, B1, C, L2)
-		SnonZero = torch.count_nonzero(normalisedSnapshots, dim=(1,2,3))   # shape (S,)
-		mask = SnonZero > 0        # (S,) boolean
-		Snew = mask.sum().item()
-		#print("Snew = ", Snew)
-		normalisedSnapshots = normalisedSnapshots[mask]         # shape (S', B1, C, L2)
-		normalisedSnapshots = normalisedSnapshots.permute(1, 0, 2, 3)        # now (B1, S', C, L2)
-		normalisedSnapshots = normalisedSnapshots.reshape(B1*Snew, C, L2)
-		if(normalisedSnapshots.count_nonzero() == 0):
+	def getReferenceSetDelimiterID(self, keypointPairsIndicesFirst, kp_meta_batch):
+		#sync with referenceSetPosDelimitersTagStr
+		keypointPairsIndicesFirst = keypointPairsIndicesFirst.item()
+		spacy_input_id = kp_meta_batch[keypointPairsIndicesFirst]['spacy_input_id']
+		spacy_pos = kp_meta_batch[keypointPairsIndicesFirst]['spacy_input_id']
+		
+		referenceSetDelimiterID = 0
+		if(spacy_pos == ATNLPpt_keypoints.punctPosId):
+			referenceSetsFirstDelimiterString = posIntToPosString(ATNLPpt_keypoints.nlp, spacy_input_id)
+			print("referenceSetsFirstDelimiterString = ", referenceSetsFirstDelimiterString)
+			if(referenceSetsFirstDelimiterString == "."):
+				referenceSetDelimiterID += 1	#"."
+		elif(spacy_pos == ATNLPpt_keypoints.verbPosId):
+			referenceSetsFirstDelimiterString = posIntToPosString(ATNLPpt_keypoints.nlp, spacy_input_id)
+			print("referenceSetsFirstDelimiterString = ", referenceSetsFirstDelimiterString)
+			referenceSetDelimiterID += 1
+			if referenceSetsFirstDelimiterString in ATNLPpt_keypoints.verb_dict:
+				referenceSetDelimiterID += ATNLPpt_keypoints.verb_dict[referenceSetsFirstDelimiterString]
+			else:
+				printe("referenceSetsFirstDelimiterString not in verb_dict, referenceSetsFirstDelimiterString = ", referenceSetsFirstDelimiterString)
+		'''
+		elif(spacy_pos == ATNLPpt_keypoints.prepositionPosId):
+			referenceSetsFirstDelimiterString = posIntToPosString(ATNLPpt_keypoints.nlp, spacy_input_id)
+			print("referenceSetsFirstDelimiterString = ", referenceSetsFirstDelimiterString)
+			referenceSetDelimiterID += 1
+			referenceSetDelimiterID += len(ATNLPpt_keypoints.verb_dict)
+			if referenceSetsFirstDelimiterString in ATNLPpt_keypoints.prep_dict:
+				referenceSetDelimiterID += prep_dict[referenceSetsFirstDelimiterString]
+			else:
+				printe("referenceSetsFirstDelimiterString not in prep_dict, referenceSetsFirstDelimiterString = ", referenceSetsFirstDelimiterString)
+		'''
+
+		return referenceSetDelimiterID
+
+
+	def detectValidNormalisedSnapshot(self, normalisedSnapshot):
+		if(normalisedSnapshot.count_nonzero() == 0):
 			validSnapshotFound = False
 		else:
 			validSnapshotFound = True
-		return normalisedSnapshots, validSnapshotFound
-				
-	def addNormalisedSnapshotToDatabase(self, normalisedSnapshots, classTargets):
+		return validSnapshotFound
+			
+			
+	def addNormalisedSnapshotToDatabase(self, normalisedSnapshots, classTargets, keypointPairsIndicesFirst, referenceSetsFirstDelimiterPrevious, kp_meta_batch):
 		if(ATNLPsnapshotDatabaseDisk):
-			snapshotDatabaseWriter.add_batch(normalisedSnapshots, classTargets)
-		elif(ATNLPsnapshotDatabaseRamDynamic):
-			if(self.databaseRamDynamicInitialised):
-				self.database = torch.cat((self.database, normalisedSnapshots.to(ATNLPsnapshotDatabaseLoadDevice)), dim=0)		# (B3, C, L)
-				self.db_classes = torch.cat((self.db_classes, classTargets.to(ATNLPsnapshotDatabaseLoadDevice)), dim=0)		 # (B3,)
+			if(pairsPrevious is not None and keypointPairsIndicesFirst == referenceSetsFirstDelimiterPrevious):
+				pass #current snapshotDatabaseWriters already loaded 
 			else:
-				self.databaseRamDynamicInitialised = True
-				self.database = normalisedSnapshots.to(ATNLPsnapshotDatabaseLoadDevice)
-				self.db_classes = classTargets.to(ATNLPsnapshotDatabaseLoadDevice)
-			if(ATNLPnormalisedSnapshotsSparseTensors):
-				self.database = self.database.coalesce()
-		elif(ATNLPsnapshotDatabaseRamStatic):
-			S = normalisedSnapshots.shape[0]
-			for s in range(S):
-				normalisedSnapshot = normalisedSnapshots[s]
-				normalisedSnapshot = normalisedSnapshot.coalesce()
-				classTarget = classTargets[s]
-				self.imgs_list.append(normalisedSnapshot)
-				self.cls_list.append(classTarget)
-					
+				B1 = normalisedSnapshots.shape[0]
+				S = normalisedSnapshots.shape[1]
+				for b1 in range(B1):
+					for s in range(S):
+						referenceSetDelimiterID = self.getReferenceSetDelimiterID(keypointPairsIndicesFirst[b1, s], kp_meta_batch[b1])
+						snapshotDatabaseName = ATNLPpt_database.getDatabaseName(referenceSetDelimiterID, s)
+						snapshotDatabaseWriters[b1][s] = ATNLPpt_database.H5DBWriter(snapshotDatabaseName, C, L2)
+			for b1 in range(B1):
+				for s in range(S):
+					snapshotDatabaseWriter = snapshotDatabaseWriters[b1][s]
+					snapshotDatabaseWriter.add_batch(normalisedSnapshots, classTargets)
+		elif(ATNLPsnapshotDatabaseRam):
+			B1 = normalisedSnapshots.shape[0]
+			S = normalisedSnapshots.shape[1]
+			for b1 in range(B1):
+				for s in range(S):
+					referenceSetDelimiterID = self.getReferenceSetDelimiterID(keypointPairsIndicesFirst[b1, s], kp_meta_batch[b1])
+					print("referenceSetDelimiterID = ", referenceSetDelimiterID)
+					print("s = ", s)
+					normalisedSnapshot = normalisedSnapshots[b1][s]
+					classTarget = classTargets[b1][s]
+					self.normalisedSnapshot_list[referenceSetDelimiterID][s].append(normalisedSnapshot)
+					self.classTarget_list[referenceSetDelimiterID][s].append(classTarget)
+		
 	def generateClassTargets(self, slidingWindowIndex, normalisedSnapshots, B1, seq_input):
 		#for now just predict final character in sequence window
 		#FUTURE: predict Bert tokens rather than individual characters)
 		
-		B2 = normalisedSnapshots.shape[0]
+		B1 = normalisedSnapshots.shape[0]
+		S = normalisedSnapshots.shape[1]
 		y = seq_input[:, slidingWindowIndex] #shape = B1	
-		reps_per_elem = B2 // B1
-		#print("B2 = ", B2)
-		#print("B1 = ", B1)
-		classTargets = y.repeat_interleave(reps_per_elem) #shape = B2
+		B2 = B1*S
+		classTargets = y.unsqueeze(1).repeat(1, S)	#shape = (B1, S)
 		return y, classTargets
 				
 	def finaliseTrainedSnapshotDatabase(self):
@@ -352,54 +367,6 @@ class ATNLPmodel(nn.Module):
 	
 		return seq_input
 
-	if(debugATNLPsnapshotDuplicates):
-		def count_exact_duplicates(self) -> int:
-			"""
-			Returns the number of database rows that share the *same* feature vector
-			but carry *different* class labels.
-
-			Parameters
-			----------
-			db		  : (B3, C, L)  dense (Strided) **or** sparse COO tensor
-			db_classes  : (B3,)	   int64 / int32
-			"""
-			db = self.database
-			db_classes = self.db_classes
-
-			B3 = db.shape[0]
-
-			# -------- 1. build a stable hash per row --------------------------------
-			row_hashes = [""] * B3
-
-			if db.is_sparse:
-				# Flatten once for indexing
-				flat = db.coalesce()
-				idx, val = flat.indices(), flat.values()	  # (3, nnz), (nnz,)
-
-				for b in range(B3):
-					mask = idx[0] == b
-					h = hashlib.md5()
-					h.update(idx[1:, mask].t().contiguous().cpu().numpy().tobytes())
-					h.update(val[mask].cpu().numpy().tobytes())
-					row_hashes[b] = h.hexdigest()
-			else:  # dense (\u201cStrided\u201d) layout
-				for b in range(B3):
-					h = hashlib.md5(db[b].cpu().numpy().tobytes()).hexdigest()
-					row_hashes[b] = h
-
-			# -------- 2. group rows by hash and look for label conflicts ------------
-			buckets = defaultdict(list)
-			for i, h in enumerate(row_hashes):
-				buckets[h].append(i)
-
-			conflicts = 0
-			for rows in buckets.values():
-				if len(rows) > 1:
-					labels = db_classes[rows]
-					if labels.unique().numel() > 1:
-						conflicts += len(rows)
-
-			return conflicts
 
 
 

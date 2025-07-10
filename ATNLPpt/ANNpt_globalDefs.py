@@ -435,7 +435,7 @@ elif(useNLPDataset):
 	if(useAlgorithmATNLP):
 		B1 = batchSize
 		#B2 is encapsulates the number of normalisations (sets of 2 keypoints); either b) B1*r or c) B1*r*(q-1).
-		B2train = B1*r
+		B2 = B1*S
 	
 def round_up_to_power_of_2(x: float) -> int:
 	if x <= 0:

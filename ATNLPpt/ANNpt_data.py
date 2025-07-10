@@ -638,6 +638,7 @@ elif(useNLPDataset):
 	    			bert_offsets    : List[(start,end)]      (char alignment)
 	    		spacy_input_ids : List[int]              (orth IDs)
 	    		spacy_pos       : List[int]              (POS enum)
+	    		spacy_tag       : List[int]              (TAG enum)
 	    		spacy_offsets   : List[(start,end)]
 			"""
 			global bert_tokenizer, bert_pad_id
@@ -675,10 +676,12 @@ elif(useNLPDataset):
 					def to_int64(u):                                 # keep sign if already < 2^63
 						return u if u < (1 << 63) else u - (1 << 64) # two\u2019s-complement wrap
 					sp_ids = [to_int64(tok.lex_id) for tok in doc][:contextSizeMaxSpacyTokens]
-					sp_pos = [to_int64(tok.tag)    for tok in doc][:contextSizeMaxSpacyTokens]
+					sp_pos = [to_int64(tok.pos)    for tok in doc][:contextSizeMaxSpacyTokens]
+					sp_tag = [to_int64(tok.tag)    for tok in doc][:contextSizeMaxSpacyTokens]
 					sp_off = [ (tok.idx, tok.idx+len(tok)) for tok in doc ][:contextSizeMaxSpacyTokens]
 					out["spacy_input_ids"].append(sp_ids)
 					out["spacy_pos"].append(sp_pos)
+					out["spacy_tag"].append(sp_tag)
 					out["spacy_offsets"].append(sp_off)
 
 			return out
@@ -707,6 +710,7 @@ elif(useNLPDataset):
 			if(useNLPDatasetMultipleTokenisationSpacy):
 				spacy_ids  = pad1d([s["spacy_input_ids"]  for s in batch], 0)
 				spacy_pos  = pad1d([s["spacy_pos"]        for s in batch], 0)
+				spacy_tag  = pad1d([s["spacy_tag"]        for s in batch], 0)
 				spacy_off  = pad2d([s["spacy_offsets"]    for s in batch])
 
 			x = {}
@@ -723,6 +727,7 @@ elif(useNLPDataset):
 				x = x | {
 					"spacy_input_ids": spacy_ids,
 					"spacy_pos"      : spacy_pos,
+					"spacy_tag"      : spacy_tag,
 					"spacy_offsets"  : spacy_off,
 				}
 					
@@ -740,14 +745,6 @@ elif(useNLPDataset):
 
 			def __iter__(self):
 				for art in self.hf_ds:                          # art is already a dict from encode_multi
-					# No heavy work here \u2013 just forward the fields your collate() needs.
-					# If you prefer tensors early, uncomment the few lines below.
-
-					# for key in ("char_input_ids", "bert_input_ids", "spacy_input_ids", "spacy_pos"):
-					#     art[key] = pt.tensor(art[key], dtype=pt.long)
-					# art["bert_offsets"]  = pt.tensor(art["bert_offsets"],  dtype=pt.long)
-					# art["spacy_offsets"] = pt.tensor(art["spacy_offsets"], dtype=pt.long)
-
 					yield art
 
 			''' 
@@ -759,6 +756,7 @@ elif(useNLPDataset):
 			if(useNLPDatasetMultipleTokenisationSpacy):
 				"spacy_input_ids": (B, Ls),
 				"spacy_pos"      : (B, Ls),
+				"spacy_tag"      : (B, Ls),
 				"spacy_offsets"  : (B, Ls, 2),
 			'''
 	else:
@@ -831,37 +829,38 @@ elif(useNLPDataset):
 		loader = DataLoader(ds, batch_size=batchSize, collate_fn=collate, num_workers=numWorkers, pin_memory=pt.cuda.is_available())
 
 		return loader
+		
+	if(useNLPDatasetMultipleTokenisationChar):
+		def ascii_printable_with_whitespace() -> list[str]:
+			"""
+			Return ASCII chars 0-127 with all control codes removed
+			except the standard whitespace set:
+				e.g. space (32), TAB (9), LF (10), [CR (13), VT (11), FF (12)]
+			The order is stable: whitespace first, then 32-126 printable.
+			"""
+			# whitelist the whitespace control chars you want to keep
+			whitespace_keep = {' ', '\t', '\n'}		#{' ', '\t', '\n', '\r', '\v', '\f'}
 
-if(useNLPDatasetMultipleTokenisationChar):
-	def ascii_printable_with_whitespace() -> list[str]:
-		"""
-		Return ASCII chars 0-127 with all control codes removed
-		except the standard whitespace set:
-			e.g. space (32), TAB (9), LF (10), [CR (13), VT (11), FF (12)]
-		The order is stable: whitespace first, then 32-126 printable.
-		"""
-		# whitelist the whitespace control chars you want to keep
-		whitespace_keep = {' ', '\t', '\n'}		#{' ', '\t', '\n', '\r', '\v', '\f'}
+			chars = []
+			# 0-127 inclusive
+			for code in range(128):
+				ch = chr(code)
+				# keep if printable or whitelisted whitespace
+				if ch.isprintable() or ch in whitespace_keep:
+					chars.append(ch)
+			return chars
 
-		chars = []
-		# 0-127 inclusive
-		for code in range(128):
-			ch = chr(code)
-			# keep if printable or whitelisted whitespace
-			if ch.isprintable() or ch in whitespace_keep:
-				chars.append(ch)
-		return chars
+		def _build_char_tables():
+			if useNLPcharacterInputBasic:
+				table = {c: i+1 for i, c in enumerate(NLPcharacterInputBasicSet)}  # 0 reserved for PAD (NLPcharacterInputPadTokenID)
+				rev   = {i+1: c for i, c in enumerate(NLPcharacterInputBasicSet)}
+			else:
+				# Drop all control codes (0-31, 127) but keep whitespace
+				allowed = ascii_printable_with_whitespace()
+				assert len(allowed) == NLPcharacterInputSetLen-1	# -1 explanation; 0 reserved for PAD (NLPcharacterInputPadTokenID)
+				table = {c: idx+1 for idx, c in enumerate(allowed)}	 #0 reserved for PAD (NLPcharacterInputPadTokenID)
+				rev   = {idx+1: c for idx, c in enumerate(allowed)}
+			return table, rev
 
-	def _build_char_tables():
-		if useNLPcharacterInputBasic:
-			table = {c: i+1 for i, c in enumerate(NLPcharacterInputBasicSet)}  # 0 reserved for PAD (NLPcharacterInputPadTokenID)
-			rev   = {i+1: c for i, c in enumerate(NLPcharacterInputBasicSet)}
-		else:
-			# Drop all control codes (0-31, 127) but keep whitespace
-			allowed = ascii_printable_with_whitespace()
-			assert len(allowed) == NLPcharacterInputSetLen-1	# -1 explanation; 0 reserved for PAD (NLPcharacterInputPadTokenID)
-			table = {c: idx+1 for idx, c in enumerate(allowed)}	 #0 reserved for PAD (NLPcharacterInputPadTokenID)
-			rev   = {idx+1: c for idx, c in enumerate(allowed)}
-		return table, rev
+		_CHAR2ID, _ID2CHAR = _build_char_tables()
 
-	_CHAR2ID, _ID2CHAR = _build_char_tables()

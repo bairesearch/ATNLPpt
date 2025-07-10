@@ -22,10 +22,9 @@ from typing import Literal
 			
 printATNLPmodelProperties = True
 
-debugSequentialLoops = False
+debugSequentialLoops = True
 debugATNLPnormalisation = False
-debugATNLPcomparison = False
-debugATNLPsnapshotDuplicates = False
+debugATNLPcomparison = True
 debugATNLPkeypoints = False
 
 useNLPDataset = True	#mandatory
@@ -39,7 +38,7 @@ if pt.cuda.is_available():
 	deviceGPU = pt.device("cuda")
 deviceCPU = pt.device("cpu")
 
-ATNLPnormalisedSnapshotsSparseTensors = True	#optional	#required to perform image comparison against a database of any significant size at speed
+ATNLPnormalisedSnapshotsSparseTensors = True	#mandatory	#required to perform image comparison against a database of any significant size at speed
 ATNLPcomparisonShiftInvariance = False	#default: True	#orig: False	#add redundancy to support incomplete alignment between candidate and database normalised snapshots
 ATNLPcomparisonShiftInvariancePixels = None
 if(ATNLPcomparisonShiftInvariance):
@@ -52,44 +51,26 @@ else:
 	generateConnectionsAfterPropagating = True	#default: True	#relevant for ATNLPsnapshotDatabaseRamDynamic only	#set to False for debug only - adds the current normalisedSnapshots to the self.database before executing compare_1d_batches() 
 
 ATNLPsnapshotDatabaseDisk = False	#slow and high capacity
-ATNLPsnapshotDatabaseRamDynamic = True	#slow and low capacity (but enables train predictions)	#continuously update database tensor (do not use intermediary python list)	#useful for debug (required for prediction performance during train)
-ATNLPsnapshotDatabaseRamStatic = False 	#fast and low capacity
+ATNLPsnapshotDatabaseRam = True 	#fast and low capacity
 if(ATNLPsnapshotDatabaseDisk):
-	if(ATNLPnormalisedSnapshotsSparseTensors):
-		ATNLPsnapshotDatabaseDiskSetSize = False	#mandatory: False (non-h5 database)
-		ATNLPsnapshotDatabaseDiskChunkSize = 1000000
-		ATNLPsnapshotDatabaseDiskCompareChunks = True	#default: True: compare database chunks directly from disk (enables comparison of a much larger database than what can be loaded into ram simultaneously)
-	else:
-		ATNLPsnapshotDatabaseDiskSetSize = False		#default: False	#plan to depreciate
-		ATNLPsnapshotDatabaseDiskChunkSize = 8000	#CHECKTHIS
-		if(ATNLPsnapshotDatabaseDiskSetSize):
-			ATNLPsnapshotDatabaseDiskCompareChunks = False	#mandatory: False (comparing images directly from disk requries h5)
-		else:
-			ATNLPsnapshotDatabaseDiskCompareChunks = True	#default: True: compare database chunks directly from disk (enables comparison of a much larger database than what can be loaded into ram simultaneously)
+	ATNLPsnapshotDatabaseDiskChunkSize = 1000000
+	ATNLPsnapshotDatabaseDiskCompareChunks = True	#default: True: compare database chunks directly from disk (enables comparison of a much larger database than what can be loaded into ram simultaneously)
 	if(ATNLPsnapshotDatabaseDiskCompareChunks):
 		ATNLPsnapshotDatabaseDiskCompareChunksSize = ATNLPsnapshotDatabaseDiskChunkSize
 	else:
 		ATNLPsnapshotCompareChunkSize = ATNLPsnapshotDatabaseDiskChunkSize	#CHECKTHIS
-		ATNLPsnapshotDatabaseLoadDevice = deviceCPU	#default: deviceCPU
-	if(ATNLPnormalisedSnapshotsSparseTensors):
-		ATNLPsnapshotDatabaseDiskSetSize = False	#mandatory: False	#sparse tensors require H5 database (dynamic) - only implementation available
-	else:
-		ATNLPsnapshotDatabaseDiskSetSize = False		#default: False	#else dynamic	#optional
-	
-	if(ATNLPsnapshotDatabaseDiskSetSize):
-		snapshotDatabaseNameFloat32 = "db_float32.mmp"
-		snapshotDatabaseNameInt32 = "db_int32.mmp"
-	else:
-		snapshotDatabaseName = "train_db.h5"
-elif(ATNLPsnapshotDatabaseRamDynamic):
-	ATNLPsnapshotDatabaseDiskCompareChunks = False	#mandatory: False
-	ATNLPsnapshotCompareChunkSize = None	#chunking is advantageous only if the whole flattened database (plus the similarity matrix) cannot fit on your GPU; otherwise chunking just adds loop overhead.
-	ATNLPsnapshotDatabaseLoadDevice = deviceGPU	#default: deviceGPU
-elif(ATNLPsnapshotDatabaseRamStatic):
+		ATNLPsnapshotDatabaseLoadDevice = deviceCPU	#default: deviceCPU	
+	snapshotDatabaseNamePrepend = "train_db"
+	snapshotDatabaseNameExtension = ".h5"
+	ATNLPsnapshotDatabaseRamDynamic = False	#mandatory: False
+elif(ATNLPsnapshotDatabaseRam):
 	ATNLPsnapshotDatabaseDiskCompareChunks = False	#mandatory: False
 	ATNLPsnapshotCompareChunkSize = None	#chunking is advantageous only if the whole flattened database (plus the similarity matrix) cannot fit on your GPU; otherwise chunking just adds loop overhead.
 	ATNLPsnapshotDatabaseLoadDevice = deviceGPU	#default: deviceCPU
-
+	if(debugATNLPcomparison):
+		ATNLPsnapshotDatabaseRamDynamic = True	#optional #slow and low capacity (but enables train predictions)	#continuously update database tensor (do not use intermediary python list)	#useful for debug (required for prediction performance during train)	#debug only
+	else:
+		ATNLPsnapshotDatabaseRamDynamic = False
 
 useSlidingWindow = True	#enables sliding window	#mandatory
 
@@ -115,7 +96,7 @@ numberOfClasses = ATNLPcontinuousVarEncodingNumBits
 sequenceLength = contextSizeMax
 NLPcharacterInputPadTokenID = 0	#must be same as bert pad token id	#assert bert_tokenizer.pad_token_id == NLPcharacterInputPadTokenID
 
-inputDataNames = ["char_input_ids", "bert_input_ids", "bert_offsets", "spacy_input_ids", "spacy_pos", "spacy_offsets"]	
+inputDataNames = ["char_input_ids", "bert_input_ids", "bert_offsets", "spacy_input_ids", "spacy_pos", "spacy_tag", "spacy_offsets"]	
 
 #encoding vars;
 C = ATNLPcontinuousVarEncodingNumBits	#vocabulary size
@@ -128,12 +109,18 @@ L2 = 10	#default: 10	#normalisation length for each reference set
 keypointModes = Literal["allKeypointCombinations", "firstKeypointConsecutivePairs", "firstKeypointPairs"]
 r = 3	#the last r (user defined) set of 2 consecutive keypoints in batch sequence
 q = 4   #the last r (user defined) set of 2 keypoints (of distance 2->q) in batch sequence               
-#referenceSetPosDelimitersStr = {".", "CC", "IN", "TO", "VB", "VBD", "VBG", "VBN", "VBP", "VBZ", ",", ";"}       # identical to TF version
-referenceSetPosDelimitersStr = {".", "VB", "VBD", "VBG", "VBN", "VBP", "VBZ"}	#verbs only	#TODO: collapse auxiliary verbs (eg tagged as VBZ/VBD) with adjacent VBN into single ref set delimiter; eg has [VBZ] run [VBN], had [VBD] gone [VBN] -> has_run [VBZ], had_gone [VBD]
-keypointModeTrain="firstKeypointConsecutivePairs"	 #out shape = (B1*r, C, L2)
-#keypointModeTest="firstKeypointPairs"	 	#out shape = (B1*r*(q-1), C, L2)	#default (requires testing)
-keypointModeTest="firstKeypointConsecutivePairs"	 #out shape = (B1*r, C, L2)	#temp for debug
-				
+
+#referenceSetPosDelimitersPosStr = {"PUNCT", "VERB", "ADP"}
+#referenceSetPosDelimitersPosStr = {"PUNCT", "VERB"}
+##referenceSetPosDelimitersTagStr = {".", "VB", "VBD", "VBG", "VBN", "VBP", "VBZ", "IN", "TO", "CC", ",", ";"}       # identical to TF version
+referenceSetPosDelimitersTagStr = {".", "VB", "VBD", "VBG", "VBN", "VBP", "VBZ"}	#verbs only	#TODO: collapse auxiliary verbs (eg tagged as VBZ/VBD) with adjacent VBN into single ref set delimiter; eg has [VBZ] run [VBN], had [VBD] gone [VBN] -> has_run [VBZ], had_gone [VBD]
+keypointMode="firstKeypointConsecutivePairs"	 #out shape = (B1*r, C, L2)
+#keypointMode="firstKeypointPairs"	 	#out shape = (B1*r*(q-1), C, L2)	#default (requires testing)
+if(keypointMode == "firstKeypointPairs"):
+	S = r
+elif(keypointMode == "firstKeypointConsecutivePairs"):
+	S = r*(q-1)
+		
 useNLPDatasetMultipleTokenisation = True	#mandatory: True	#required for spacy tokenisation
 if(useNLPDatasetMultipleTokenisation):
 	useNLPDatasetMultipleTokenisationSpacy = True	#mandatory: True

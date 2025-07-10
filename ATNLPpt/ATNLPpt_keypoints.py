@@ -35,20 +35,36 @@ import torch
 import torch.nn.functional as F
 import spacy
 from typing import List, Dict, Tuple, Literal
+
 nlp = spacy.load("en_core_web_sm", disable=("ner", "parser", "lemmatizer"))
-referenceSetPosDelimitersId = [posStringToPosInt(nlp, string) for string in referenceSetPosDelimitersStr]
+referenceSetPosDelimitersTagId = [posStringToPosInt(nlp, string) for string in referenceSetPosDelimitersTagStr]
+#referenceSetPosDelimitersPosId = [posStringToPosInt(nlp, string) for string in referenceSetPosDelimitersPosStr]
+verbPosId = posStringToPosInt(nlp, "VERB")
+prepositionPosId = posStringToPosInt(nlp, "ADP")
+punctPosId = posStringToPosInt(nlp, "PUNCT")
+
+verb_dict = {}
+prep_dict = {}
+for lex in nlp.vocab:
+	if lex.is_alpha and lex.has_vector:  # optional: filter real words with embeddings
+		if lex.pos == nlp.vocab.strings["VERB"]:
+			verb_dict[lex.text] = len(verb_dict)
+		elif lex.pos == nlp.vocab.strings["ADP"]:
+			prep_dict[lex.text] = len(prep_dict)
 
 def build_keypoints(
+	spacy_input_id : torch.Tensor,		  # (B1, L1)
 	spacy_pos : torch.Tensor,		  # (B1, L1)
+	spacy_tag : torch.Tensor,		  # (B1, L1)
 	spacy_offsets : torch.Tensor,		  # (B1, L1, 2)
 ) -> Tuple[List[List[int]], List[List[Dict]]]:
 
-	batchSize = spacy_pos.shape[0]
+	batchSize = spacy_tag.shape[0]
 	kp_indices_batch = []
 	kp_meta_batch = []
 	
 	for b in range(batchSize):
-		kp_indices, kp_meta = _detect_keypoints(spacy_pos[b], spacy_offsets[b])
+		kp_indices, kp_meta = _detect_keypoints(spacy_input_id[b], spacy_pos[b], spacy_tag[b], spacy_offsets[b])
 		kp_indices.reverse()
 		kp_meta.reverse()
 		kp_indices_batch.append(kp_indices)
@@ -59,37 +75,45 @@ def build_keypoints(
 # ------------------------------------------------------------------------- #
 # (1) + (2)  spaCy-based key-point detector that always includes last token #
 # ------------------------------------------------------------------------- #
-def _detect_keypoints(spacy_pos: torch.Tensor, spacy_offsets: torch.Tensor) -> Tuple[List[int], List[Dict]]:
+def _detect_keypoints(	
+	spacy_input_id : torch.Tensor,		  # (L1)
+	spacy_pos : torch.Tensor,		  # (L1)
+	spacy_tag : torch.Tensor,		  # (L1)
+	spacy_offsets : torch.Tensor		  # (L1, 2)
+) -> Tuple[List[int], List[Dict]]:
 	"""
 	Parameters
 	----------
+	spacy_input_id : torch.Tensor,		  # (L1)
 	spacy_pos : torch.Tensor,		  # (L1)
+	spacy_tag : torch.Tensor,		  # (L1)
 	spacy_offsets : torch.Tensor,		  # (L1, 2)
 	
 	Return
 	------
 	kp_indices : token indices that are key-points
-	kp_meta	   : [{token_idx, pos, char_start, char_end}, ...]
+	kp_meta	   : [{token_idx, spacy_pos, spacy_tag, spacy_input_id, char_start, char_end}, ...]
 	"""
 	kp_indices, kp_meta = [], []
 
-	L1 = spacy_pos.shape[0]
+	L1 = spacy_tag.shape[0]
 	for i in range(L1):
-		spacyInt = spacy_pos[i].item()
+		spacyInt = spacy_tag[i].item()
 		#print("i = ", i, ", spacyInt = ", spacyInt)
-		is_kp = spacyInt in referenceSetPosDelimitersId or i == 0	#always treat first token in sequence as a keypoint
+		is_kp = spacyInt in referenceSetPosDelimitersTagId or i == 0	#always treat first token in sequence as a keypoint
 		if is_kp:
 			#print("is_kp")
 			kp_indices.append(i)
 		kp_meta.append({
 			"token_idx": i,
-			"pos": spacy_pos[i],
+			"spacy_pos": spacy_pos[i],
+			"spacy_tag": spacy_tag[i],
+			"spacy_input_id": spacy_input_id[i],
 			"char_start": spacy_offsets[i][0],	#tok.idx,
-			"char_end": spacy_offsets[i][1]	#tok.idx + len(tok)
+			"char_end": spacy_offsets[i][1],	#tok.idx + len(tok)
 		})
 
 	return kp_indices, kp_meta
-
 
 def insert_keypoints_last_token(
 	last_token_idx_sample: int,
