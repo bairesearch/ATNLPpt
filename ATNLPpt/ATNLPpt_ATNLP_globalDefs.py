@@ -55,21 +55,16 @@ ATNLPsnapshotDatabaseDisk = False	#slow and high capacity
 ATNLPsnapshotDatabaseRam = True 	#fast and low capacity
 if(ATNLPsnapshotDatabaseDisk):
 	ATNLPsnapshotDatabaseDiskChunkSize = 1000000
-	ATNLPsnapshotDatabaseDiskCompareChunks = True	#default: True: compare database chunks directly from disk (enables comparison of a much larger database than what can be loaded into ram simultaneously)
-	if(ATNLPsnapshotDatabaseDiskCompareChunks):
-		ATNLPsnapshotDatabaseDiskCompareChunksSize = ATNLPsnapshotDatabaseDiskChunkSize
-	else:
-		ATNLPsnapshotCompareChunkSize = ATNLPsnapshotDatabaseDiskChunkSize	#CHECKTHIS
-		ATNLPsnapshotDatabaseLoadDevice = deviceCPU	#default: deviceCPU	
+	ATNLPsnapshotDatabaseDiskCompareChunksSize = ATNLPsnapshotDatabaseDiskChunkSize
+	ATNLPsnapshotDatabaseLoadDevice = deviceCPU	#default: deviceCPU	
 	snapshotDatabaseNamePrepend = "train_db"
 	snapshotDatabaseNameExtension = ".h5"
 	ATNLPsnapshotDatabaseRamDynamic = False	#mandatory: False
 elif(ATNLPsnapshotDatabaseRam):
-	ATNLPsnapshotDatabaseDiskCompareChunks = False	#mandatory: False
 	ATNLPsnapshotCompareChunkSize = None	#chunking is advantageous only if the whole flattened database (plus the similarity matrix) cannot fit on your GPU; otherwise chunking just adds loop overhead.
-	ATNLPsnapshotDatabaseLoadDevice = deviceGPU	#default: deviceCPU
+	ATNLPsnapshotDatabaseLoadDevice = deviceGPU	#default: deviceGPU
 	if(debugATNLPcomparison):
-		ATNLPsnapshotDatabaseRamDynamic = True	#optional #slow and low capacity (but enables train predictions)	#continuously update database tensor (do not use intermediary python list)	#useful for debug (required for prediction performance during train)	#debug only
+		ATNLPsnapshotDatabaseRamDynamic = True	#optional #very slow but enables train predictions	#continuously update database tensor (do not use intermediary python list)	#useful for debug (required for prediction performance during train)	#debug only
 	else:
 		ATNLPsnapshotDatabaseRamDynamic = False
 

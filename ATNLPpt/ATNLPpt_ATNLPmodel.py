@@ -174,7 +174,7 @@ class ATNLPmodel(nn.Module):
 			# Prediction
 			# -----------------------------
 			if(not trainOrTest or ATNLPsnapshotDatabaseRamDynamic):
-				if(ATNLPsnapshotDatabaseDiskCompareChunks):
+				if(ATNLPsnapshotDatabaseDisk):
 					comparisonFound, unit_sim, top_cls, avg_sim = ATNLPpt_comparison.compare_1d_batches_stream_db(self, normalisedSnapshots, B1, keypointPairsIndices, kp_meta_batch, chunk_nnz=ATNLPsnapshotDatabaseDiskCompareChunksSize, device=device, shiftInvariantPixels=ATNLPcomparisonShiftInvariancePixels)
 				else:
 					comparisonFound, unit_sim, top_cls, avg_sim = ATNLPpt_comparison.compare_1d_batches(self, normalisedSnapshots, B1, keypointPairsIndices, kp_meta_batch, chunk=ATNLPsnapshotCompareChunkSize, device=device, shiftInvariantPixels=ATNLPcomparisonShiftInvariancePixels)
@@ -337,7 +337,7 @@ class ATNLPmodel(nn.Module):
 		return y, classTargets
 				
 	def finaliseTrainedSnapshotDatabase(self):
-		if(ATNLPsnapshotDatabaseDiskCompareChunks):
+		if(ATNLPsnapshotDatabaseDisk):
 			pass	#h5 database is read directly during comparison
 		else:	
 			ATNLPpt_database.finaliseTrainedSnapshotDatabase(self)	#generate self.database tensor from database for comparison

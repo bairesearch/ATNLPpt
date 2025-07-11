@@ -107,9 +107,6 @@ if(ATNLPsnapshotDatabaseDisk):
 		def close(self):
 			self.h5.flush()
 			self.h5.close()
-
-	def finaliseTrainedSnapshotDatabase(self):
-		pass
 elif(ATNLPsnapshotDatabaseRam):
 	def finaliseTrainedSnapshotDatabase(self):
 		referenceSetDelimiterIDmax = self.getReferenceSetDelimiterIDmax()

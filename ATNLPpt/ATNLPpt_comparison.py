@@ -64,7 +64,7 @@ if(not ATNLPcomparisonShiftInvariance):
 
 			return sim
 				
-if(ATNLPsnapshotDatabaseDiskCompareChunks):
+if(ATNLPsnapshotDatabaseDisk):
 	if(ATNLPcomparisonShiftInvariance):
 		# ===================================================================== #
 		#  STREAMING, OUT-OF-CORE VARIANT \u2013 loads DB from HDF5 in sparse chunks #
@@ -118,9 +118,10 @@ if(ATNLPsnapshotDatabaseDiskCompareChunks):
 				shifted.append(tmp.reshape(B2, D).T.contiguous())		# transpose for GEMM
 
 			# ---- running outputs -------------------------------------------------
-			best_val = torch.full((B2,), -float("inf"), device=device)
-			best_idx = torch.full((B2,), -1, dtype=torch.long, device=device)
-			sumsq	 = torch.zeros(B2, device=device)		# for L2-unit sim
+			best_val = torch.full((B2,), -float("inf"), device=device)	# (B2)
+			best_idx = torch.full((B2,), -1, dtype=torch.long, device=device)	# (B2)
+			best_class = torch.full((B2,), -1, dtype=torch.long, device=device,)	# (B2)
+			sumsq = torch.zeros(B2, device=device)		# for L2-unit sim
 
 			# ---- tiny helper: sparse max-corr with shift window -----------------
 			def _max_corr_row(c_idx, c_val, d_idx, d_val):
@@ -152,7 +153,7 @@ if(ATNLPsnapshotDatabaseDiskCompareChunks):
 							class_ds = torch.from_numpy(h5["classes"][...]).to(torch.int64)
 							val_ds	 = h5["values"]
 							idx_ds	 = h5["indices"]			  # (3, nnz)
-							B3		 = class_ds.numel()
+							B3 = class_ds.numel()
 
 							start = 0
 							while start < B3:
@@ -200,16 +201,15 @@ if(ATNLPsnapshotDatabaseDiskCompareChunks):
 								if(mask):
 									best_val[b2] = cur_best[0]
 									best_idx[b2] = cur_idx[0] + start
-
+									best_class[b2] = class_ds[best_idx[b2]]
+									
 								start = end
 								
 								comparisonFound = True
 					else:
 						pass
 			if(comparisonFound):
-				# ---- aggregate over snapshots --------------------------------------
-				assert B2 % B1 == 0, "B2 must divide into snapshots"
-				unit_sim, top_cls, avg_sim = calculateTopCls(eps, class_ds, sumsq, best_val, best_idx, None, B1, B2, B3, S)			
+				unit_sim, top_cls, avg_sim = calculateTopCls(eps, class_ds, sumsq, best_val, best_idx, best_class, B1, B2, S)
 
 			return comparisonFound, unit_sim, top_cls, avg_sim
 
@@ -266,7 +266,8 @@ if(ATNLPsnapshotDatabaseDiskCompareChunks):
 
 			# ---- prepare running outputs ------------------------------------------
 			best_val = torch.full((B2,), -float("inf"), device=device)	# (B2)
-			best_idx = torch.full((B2,), -1,		   device=device, dtype=torch.long)	# (B2)
+			best_idx = torch.full((B2,), -1, dtype=torch.long, device=device)	# (B2)
+			best_class = torch.full((B2,), -1, dtype=torch.long, device=device)	# (B2)
 			sumsq = torch.zeros(B2, device=device)	 # accumulate sim for L2 later	# (B2)
 
 			for b1 in range(B1):
@@ -281,9 +282,9 @@ if(ATNLPsnapshotDatabaseDiskCompareChunks):
 						with h5py.File(h5_path, "r") as h5:
 							ptr_ds	= h5["img_ptr"]	  # (B3+1,)
 							class_ds = torch.from_numpy(np.asarray(h5["classes"], dtype=np.int64))
-							B3		= class_ds.numel()
-							C_tot	= C	 # same as candidates, but keep for clarity
-							L_tot	= L
+							B3 = class_ds.numel()
+							C_tot = C	 # same as candidates, but keep for clarity
+							L_tot = L
 
 							val_ds = h5["values"]
 							idx_ds = h5["indices"]	# (3, nnz)
@@ -340,6 +341,7 @@ if(ATNLPsnapshotDatabaseDiskCompareChunks):
 								if(mask):
 									best_val[b2] = cur_best[0]
 									best_idx[b2] = cur_idx[0] + start
+									best_class[b2] = class_ds[best_idx[b2]]
 
 								start = end		# next slice
 								
@@ -347,9 +349,7 @@ if(ATNLPsnapshotDatabaseDiskCompareChunks):
 					else:
 						pass
 			if(comparisonFound):
-				# ---- finish aggregation over snapshots -------------------------------
-				assert B2 % B1 == 0, "B2 must be a multiple of base_batch"
-				unit_sim, top_cls, avg_sim = calculateTopCls(eps, class_ds, sumsq, best_val, best_idx, None, B1, B2, B3, S)
+				unit_sim, top_cls, avg_sim = calculateTopCls(eps, class_ds, sumsq, best_val, best_idx, best_class, B1, B2, S)
 
 			return comparisonFound, unit_sim, top_cls, avg_sim		
 else:
@@ -466,7 +466,7 @@ else:
 						sim_id = torch.tensor([0])	#CHECKTHIS
 						sim_class = torch.tensor([-1])	#CHECKTHIS
 						sim = None #torch.zeros((1, 1), device=device)
-						print("self.database[referenceSetDelimiterID][s] is None")
+						#print("self.database[referenceSetDelimiterID][s] is None")
 					
 					simList.append(sim)
 					B2sim_valsList.append(sim_val)
@@ -476,20 +476,11 @@ else:
 					simList.append(sim)
 
 			if(comparisonFound):
-				#sim = torch.cat(simList, dim=0)	 # (B2, B3)
 				sim = None	#B3 is no longer consistent across B2
 				B2sim_vals = torch.cat(B2sim_valsList, dim=0)	 # (B2)
 				B2sim_ids = torch.cat(B2sim_idsList, dim=0)	 # (B2)
 				B2sim_class = torch.cat(B2sim_classList, dim=0)	 # (B2)
-				
-				# --- aggregate over S snapshots per logical sample -----------------------
-				#B2, B3 = sim.shape
-				B3 = None #B3 is no longer consistent across B2
-				assert B2 % B1 == 0, "B2 must be a multiple of base_batch"
-
-				#assume sim.shape = (B2, B3)
-				#B2sim_vals, B2sim_ids = torch.max(sim, dim=1)	# (B2)	#B3 is no longer consistent across B2
-				unit_sim, top_cls, avg_sim = calculateTopCls(eps, db_classes, sim, B2sim_vals, B2sim_ids, B2sim_class, B1, B2, B3, S)
+				unit_sim, top_cls, avg_sim = calculateTopCls(eps, db_classes, sim, B2sim_vals, B2sim_ids, B2sim_class, B1, B2, S)
 			
 			return comparisonFound, unit_sim, top_cls, avg_sim
 
@@ -587,7 +578,7 @@ else:
 						sim_id = torch.tensor([0])	#CHECKTHIS
 						sim_class = torch.tensor([-1])	#CHECKTHIS
 						sim = None #torch.zeros((1, 1), device=device)
-						print("self.database[referenceSetDelimiterID][s] is None")
+						#print("self.database[referenceSetDelimiterID][s] is None")
 					
 					simList.append(sim)
 					B2sim_valsList.append(sim_val)
@@ -595,69 +586,33 @@ else:
 					B2sim_classList.append(sim_class)
 					
 			if(comparisonFound):
-				#sim = torch.cat(simList, dim=0)	 # (B2, B3)
 				sim = None	#B3 is no longer consistent across B2
 				B2sim_vals = torch.cat(B2sim_valsList, dim=0)	 # (B2)
 				B2sim_ids = torch.cat(B2sim_idsList, dim=0)	 # (B2)
 				B2sim_class = torch.cat(B2sim_classList, dim=0)	 # (B2)
-
-				# ---------------------------------------------------------------------- #
-				# 3. convert each row into a **unit similarity vector** (L2 = 1).		#
-				# ---------------------------------------------------------------------- #
-				# --- aggregate over S snapshots per logical sample -----------------------
-				#B2, B3 = sim.shape
-				B3 = None #B3 is no longer consistent across B2
-				assert B2 % B1 == 0, "B2 must be a multiple of base_batch"
-
-				#assume sim.shape = (B2, B3)
-				#B2sim_vals, B2sim_ids = torch.max(sim, dim=1)	# (B2)	#B3 is no longer consistent across B2
-				unit_sim, top_cls, avg_sim = calculateTopCls(eps, db_classes, sim, B2sim_vals, B2sim_ids, B2sim_class, B1, B2, B3, S)
+				unit_sim, top_cls, avg_sim = calculateTopCls(eps, db_classes, sim, B2sim_vals, B2sim_ids, B2sim_class, B1, B2, S)
 			
 			return comparisonFound, unit_sim, top_cls, avg_sim
 
-def calculateTopCls(eps, db_classes, sim, B2sim_vals, B2sim_ids, B2sim_class, B1, B2, B3, S):
+def calculateTopCls(eps, db_classes, sim, B2sim_vals, B2sim_ids, B2sim_class, B1, B2, S):
 
 	#B3 is no longer consistent across B2; sim not available
-	'''
-	if(debugATNLPcomparison):
-		exact_mask = sim > 0.99999          # tweak threshold if needed
-		rows, cols = exact_mask.nonzero(as_tuple=True)
-		print("Exact-like hits:", len(rows))
-		print(" rows[:10] =", rows[:10].tolist())
-		print(" cols[:10] =", cols[:10].tolist())
-		if len(rows):
-			print(" classes @ cols[:10] =", db_classes[cols[:10]].tolist())
-	'''
-
+	
 	B2sim_vals = B2sim_vals.view(B1, S)		# (B1, S)
 	B2sim_ids = B2sim_ids.view(B1, S)		# (B1, S)
-	
-	B1sim_vals = B2sim_vals.mean(dim=1)						# (B1)
-	avg_sim = B1sim_vals	  # (B1)
-	if(ATNLPsnapshotDatabaseDiskCompareChunks):
-		#orig method
-		max_idx_in_S = B2sim_vals.argmax(dim=1)					# (B1)
-		B1sim_ids = B2sim_ids[torch.arange(B1, device=B2sim_ids.device), max_idx_in_S]	# (B1)
-		top_cls = db_classes[B1sim_ids]					  # (B1)
-	else:
-		B2sim_class = B2sim_class.view(B1, S)		# (B1, S)
-		top_cls, _ = torch.mode(B2sim_class, dim=1)  # returns (values, indices)	#TODO: find a better method
+	B2sim_class = B2sim_class.view(B1, S)		# (B1, S)
 
-	if(ATNLPsnapshotDatabaseDiskCompareChunks):
+	avg_sim = B2sim_vals.mean(dim=1)		# (B1)
+	top_cls, _ = torch.mode(B2sim_class, dim=1)  # returns (values, indices)	#TODO: find a better method (prioritise B2sim_class[B1, 0] ie nearest reference set class prediction)
+
+	if(ATNLPsnapshotDatabaseDisk):
 		sumsq = sim
-		# ---- inexpensive \u201cunit_sim\u201d proxy (norm only) -----------------------
 		#unit_sim = (sumsq / (sumsq.sum(dim=1, keepdim=True) + eps)).sqrt()
 		unit_sim = torch.sqrt(sumsq + eps)		# shape (B2,)
-
-		#  NOTE: the above gives you only the *norm* part.  Reconstructing the
-		#  full (B2, B3) vector requires either: (a) a second DB pass that
-		#  writes into a memory-mapped array, or (b) storing all sim blocks on
-		#  disk.  Most users never actually need the entire vector, only the
-		#  top-k scores.  If you do need it, ask and I\u2019ll show option (a) with
-		#  numpy.memmap.
 	else:
+		#B3 is no longer consistent across B2; sim not available
 		#unit_sim = F.normalize(sim, p=2, dim=1, eps=eps)					# (B2, B3)
-		unit_sim = None #B3 is no longer consistent across B2
+		unit_sim = None
 	
 	return unit_sim, top_cls, avg_sim
 	

@@ -50,9 +50,8 @@ def createModel(dataset):
 		print("\t ATNLPcomparisonShiftInvariance = ", ATNLPcomparisonShiftInvariance)
 		print("\t ATNLPcomparisonShiftInvariancePixels = ", ATNLPcomparisonShiftInvariancePixels)
 		print("\t ATNLPsnapshotDatabaseDisk = ", ATNLPsnapshotDatabaseDisk)
-		print("\t ATNLPsnapshotDatabaseRamDynamic = ", ATNLPsnapshotDatabaseRamDynamic)
 		print("\t ATNLPsnapshotDatabaseRam = ", ATNLPsnapshotDatabaseRam)
-		print("\t ATNLPsnapshotDatabaseDiskCompareChunks = ", ATNLPsnapshotDatabaseDiskCompareChunks)
+		print("\t ATNLPsnapshotDatabaseRamDynamic = ", ATNLPsnapshotDatabaseRamDynamic)
 		print("\t ---")
 
 	config = ATNLPpt_ATNLPmodel.ATNLPconfig(
