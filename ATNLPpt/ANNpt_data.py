@@ -672,13 +672,11 @@ elif(useNLPDataset):
 				if(useNLPDatasetMultipleTokenisationSpacy):
 					# --- spaCy ---
 					doc = nlp(txt)
-					# Fit into signed-64 range so torch.tensor() never overflows
-					def to_int64(u):                                 # keep sign if already < 2^63
-						return u if u < (1 << 63) else u - (1 << 64) # two\u2019s-complement wrap
-					sp_ids = [to_int64(tok.lex_id) for tok in doc][:contextSizeMaxSpacyTokens]
-					sp_pos = [to_int64(tok.pos)    for tok in doc][:contextSizeMaxSpacyTokens]
-					sp_tag = [to_int64(tok.tag)    for tok in doc][:contextSizeMaxSpacyTokens]
-					sp_off = [ (tok.idx, tok.idx+len(tok)) for tok in doc ][:contextSizeMaxSpacyTokens]
+					sp_ids = [to_int64(tok.orth) for tok in doc][:contextSizeMaxSpacyTokens]	#tok.lex_id gives -1 for all tokens (require to link a lexeme/vector cache)	#posStringToPosInt(nlp, tok.text) appears equivalent to tok.orth
+					sp_pos = [to_int64(int(tok.pos)) for tok in doc][:contextSizeMaxSpacyTokens]		#sp_pos = [to_uint64(to_int64(int(tok.pos)))    for tok in doc][:contextSizeMaxSpacyTokens]
+					sp_tag = [to_int64(tok.tag) for tok in doc][:contextSizeMaxSpacyTokens]
+					sp_off = [ (tok.idx, tok.idx+len(tok)) for tok in doc][:contextSizeMaxSpacyTokens]
+					#print("sp_ids = ", sp_ids)
 					out["spacy_input_ids"].append(sp_ids)
 					out["spacy_pos"].append(sp_pos)
 					out["spacy_tag"].append(sp_tag)
@@ -686,6 +684,23 @@ elif(useNLPDataset):
 
 			return out
 
+		def to_int64(u):   
+			# Fit into signed-64 range so torch.tensor() never overflows                             
+		 	# keep sign if already < 2^63
+			return u if u < (1 << 63) else u - (1 << 64) # two\u2019s-complement wrap
+						
+		def to_uint64(s):
+			"""
+			Given a signed 64-bit integer produced by `to_int64`, return the
+			original unsigned 64-bit value (0 \u2264 u < 2**64).
+
+			>>> u = 2**63 + 123            # any 64-bit unsigned value
+			>>> s = to_int64(u)            # -9223372036854775685
+			>>> to_uint64(s) == u
+			True
+			"""
+			return s if s >= 0 else s + (1 << 64)
+	
 		def collate(batch):
 			B = len(batch)
 			# helper -------------------------------------------------------------

@@ -26,6 +26,7 @@ debugSequentialLoops = True
 debugATNLPnormalisation = False
 debugATNLPcomparison = True
 debugATNLPkeypoints = False
+debugSkipFirstBatch = False	#skips the first dataset batch (sample) where batchSize=1 for debug, as this contains very few keypoints at start of sequence
 
 useNLPDataset = True	#mandatory
 useNLPDatasetPaddingMask = True	#default: True	#not strictly required for wikipedia dataset and small sequence lengths, as it extracts only the first L tokens from each article
@@ -149,6 +150,12 @@ workingDrive = '/large/source/ANNpython/ATNLPpt/'
 dataDrive = workingDrive	#'/datasets/'
 
 modelName = 'modelATNLP'
+
+def lexIntToLexString(nlp, lexInt):
+	if lexInt in nlp.vocab.strings:
+		return nlp.vocab.strings[lexInt]
+	else:
+		return ''
 
 def posIntToPosString(nlp, posInt):
 	if posInt in nlp.vocab.strings:

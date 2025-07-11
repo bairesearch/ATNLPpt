@@ -93,10 +93,11 @@ def normalise_batch(
 		kp_use = [character_offsets[idx][0].item() for idx in kp_indices if character_offsets[idx][0].item() < last_token_idx]
 		ATNLPpt_keypoints.insert_keypoints_last_token(last_token_idx, kp_use)
 		keypointPairsCharIdx, keypointPairsValid = ATNLPpt_keypoints.make_pairs(kp_use, mode, r, q)
-
+		
 		kp_use_spacy = [idx for idx in kp_indices if idx < last_spacy_token_idx[b]]		#if character_offsets[idx][0].item() < last_token_idx
 		ATNLPpt_keypoints.insert_keypoints_last_token(last_spacy_token_idx[b], kp_use_spacy)
-		keypointPairsIndices, _ = ATNLPpt_keypoints.make_pairs(kp_use_spacy, mode, r, q)
+		keypointPairsIndices, keypointPairsValid = ATNLPpt_keypoints.make_pairs(kp_use_spacy, mode, r, q)
+		#currently use keypointPairsValid from keypointPairsIndices (prevents intraReferenceSetDelimiter eg intraverb token prediction)
 
 		if(debugATNLPkeypoints):
 			print("kp_use_spacy = ", kp_use_spacy)
@@ -146,9 +147,10 @@ def normalise_batch(
 		print("B2 = ", B2)
 		print("normalisedSnapshots shape :", tuple(normalisedSnapshots.shape))
 		
-	keypointPairsIndicesFirst = keypointPairsIndices[:,0].reshape(B1, S)	#(B1,S)
+	keypointPairsIndices = keypointPairsIndices.reshape(B1, S, 2)	#(B1, S, 2)
+	keypointPairsValid = keypointPairsValid.reshape(B1, S)	#(B1,S)
 	
-	return normalisedSnapshots, keypointPairsIndicesFirst
+	return normalisedSnapshots, keypointPairsValid, keypointPairsIndices
 
 
 def char_idx_to_spacy_idx(

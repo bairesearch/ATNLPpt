@@ -43,14 +43,22 @@ verbPosId = posStringToPosInt(nlp, "VERB")
 prepositionPosId = posStringToPosInt(nlp, "ADP")
 punctPosId = posStringToPosInt(nlp, "PUNCT")
 
+print("loading verb_dict from nlp.vocab.strings; this will take approximately 1 minute")
 verb_dict = {}
 prep_dict = {}
-for lex in nlp.vocab:
-	if lex.is_alpha and lex.has_vector:  # optional: filter real words with embeddings
-		if lex.pos == nlp.vocab.strings["VERB"]:
-			verb_dict[lex.text] = len(verb_dict)
-		elif lex.pos == nlp.vocab.strings["ADP"]:
-			prep_dict[lex.text] = len(prep_dict)
+for word in list(nlp.vocab.strings):
+	if not word.isalpha():
+		continue
+	doc = nlp(word)
+	if not doc:  # skip empty parses
+		continue
+	tok = doc[0]
+	if tok.pos_ == "VERB":
+		verb_dict[word] = len(verb_dict)
+	elif tok.pos_ == "ADP":
+		prep_dict[word] = len(prep_dict)
+#print("verb_dict = ", verb_dict)
+
 
 def build_keypoints(
 	spacy_input_id : torch.Tensor,		  # (B1, L1)
@@ -142,6 +150,7 @@ def make_pairs(kp: List[int], mode: keypointModes, r: int, q: int) -> Tuple[torc
 	pairs	: (N, 2)  long tensor of [i, j] with i<j; invalid -> 0,0
 	valid_ms : (N,)	bool tensor, True where pair is valid
 	"""
+	
 	if len(kp) < 2:
 		# zero-fill for the expected number of rows so caller can reshape
 		if mode == "firstKeypointConsecutivePairs":
@@ -150,14 +159,16 @@ def make_pairs(kp: List[int], mode: keypointModes, r: int, q: int) -> Tuple[torc
 			N = r * (q - 1)
 		elif mode == "allKeypointCombinations":		 # we let it be empty
 			N = 0
-		return torch.zeros(N, 2, dtype=torch.long), torch.zeros(N, dtype=torch.bool)
-
+		pairs = torch.zeros(N, 2, dtype=torch.long)
+		valid = torch.zeros(N, dtype=torch.bool)
+		return pairs, valid
+		
 	# ------------  a) every ordered permutation -------------------- #
 	if mode == "allKeypointCombinations":
 		out = [(i, j) for idx_i, i in enumerate(kp) for j in kp[idx_i + 1:]]
 		pairs = torch.as_tensor(out, dtype=torch.long)
 		pairs = torch.sort(pairs, dim=1).values	# ensure i < j so downstream code always receives [start, end]
-		valid = torch.ones(len(out), dtype=torch.bool)
+		valid = pairs[:, 0] != pairs[:, 1]
 		return pairs, valid
 
 	# ------------  b) last r adjacent pairs ---------------------- #
@@ -171,7 +182,7 @@ def make_pairs(kp: List[int], mode: keypointModes, r: int, q: int) -> Tuple[torc
 			pairs[:valid_n] = torch.as_tensor(adj, dtype=torch.long)
 			pairs[:valid_n] = torch.sort(pairs[:valid_n], dim=1).values	# ensure i < j so downstream code always receives [start, end]
 		valid = torch.zeros(r, dtype=torch.bool)
-		valid[:valid_n] = True
+		valid = pairs[:, 0] != pairs[:, 1]
 		return pairs, valid
 
 	# ------------  c) last r starts, spans 2 -> q ------------------ #
@@ -192,7 +203,7 @@ def make_pairs(kp: List[int], mode: keypointModes, r: int, q: int) -> Tuple[torc
 						out.append((0, 0))
 		pairs = torch.as_tensor(out, dtype=torch.long)		  # (r*(q-1), 2)
 		pairs = torch.sort(pairs, dim=1).values	# ensure i < j so downstream code always receives [start, end]
-		valid = ~(pairs[:, 0] == pairs[:, 1])
+		valid = (pairs[:, 0] != pairs[:, 1])
 		return pairs, valid
 
 	raise ValueError(f"Unknown mode {mode}")
