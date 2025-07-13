@@ -27,6 +27,7 @@ import ATNLPpt_normalisation
 import ATNLPpt_comparison
 import ATNLPpt_database
 import ANNpt_data
+import ATNLPpt_sparseTensors
 import hashlib
 from collections import defaultdict
 
@@ -68,16 +69,26 @@ class ATNLPmodel(nn.Module):
 		# -----------------------------
 		# database declaration
 		# -----------------------------
-		if(ATNLPsnapshotDatabaseDisk):
-			self.initialiseSnapshotDatabaseWriter()
-		elif(ATNLPsnapshotDatabaseRam):
-			referenceSetDelimiterIDmax = self.getReferenceSetDelimiterIDmax()
-			print("referenceSetDelimiterIDmax = ", referenceSetDelimiterIDmax)
-			print("S = ", S)
-			self.normalisedSnapshot_list = [[[] for _ in range(S)] for _ in range(referenceSetDelimiterIDmax)]
-			self.classTarget_list = [[[] for _ in range(S)] for _ in range(referenceSetDelimiterIDmax)]
-			self.database = [[None for _ in range(S)] for _ in range(referenceSetDelimiterIDmax)]
-			self.db_classes = [[None for _ in range(S)] for _ in range(referenceSetDelimiterIDmax)]
+		referenceSetDelimiterIDmax = self.getReferenceSetDelimiterIDmax()
+		if(ATNLPindexDatabaseByClassTarget):
+			if(ATNLPsnapshotDatabaseRam):
+				self.database = [[ATNLPpt_sparseTensors.createEmptySparseTensor((numberOfClasses, C, L2)) for _ in range(S)] for _ in range(referenceSetDelimiterIDmax)]
+				self.db_classes = [[torch.empty((numberOfClasses)) for _ in range(S)] for _ in range(referenceSetDelimiterIDmax)]
+			else:
+				#temporarily load database into ram (only particular referenceSetDelimiterIDs are filled at any given time)
+				self.database = [[None for _ in range(S)] for _ in range(referenceSetDelimiterIDmax)]
+				self.db_classes = [[None for _ in range(S)] for _ in range(referenceSetDelimiterIDmax)]		#redundant with ATNLPindexDatabaseByClassTarget
+		else:
+			if(ATNLPsnapshotDatabaseDisk):
+				if(ATNLPsnapshotDatabaseDiskCompareChunks):
+					self.initialiseSnapshotDatabaseWriter()
+				else:
+					printe("!ATNLPindexDatabaseByClassTarget+ATNLPsnapshotDatabaseDisk requires ATNLPsnapshotDatabaseDiskCompareChunks")
+			elif(ATNLPsnapshotDatabaseRam):
+				self.normalisedSnapshot_list = [[[] for _ in range(S)] for _ in range(referenceSetDelimiterIDmax)]
+				self.classTarget_list = [[[] for _ in range(S)] for _ in range(referenceSetDelimiterIDmax)]
+				self.database = [[None for _ in range(S)] for _ in range(referenceSetDelimiterIDmax)]
+				self.db_classes = [[None for _ in range(S)] for _ in range(referenceSetDelimiterIDmax)]
 		
 	# ---------------------------------------------------------
 	# Forward pass
@@ -162,19 +173,24 @@ class ATNLPmodel(nn.Module):
 			
 			normalisedSnapshots = normalisedSnapshots.to_sparse_coo()
 			normalisedSnapshots = normalisedSnapshots.coalesce()
+			#if(ATNLPsnapshotDatabaseLoadDevice):
 
 			y, classTargets = self.generateClassTargets(slidingWindowIndex, normalisedSnapshots, B1, seq_input)
 			
+			if(ATNLPindexDatabaseByClassTarget):
+				if(ATNLPsnapshotDatabaseDisk):
+					ATNLPpt_database.loadSnapshotDatabaseIndices(self, normalisedSnapshots, keypointPairsValid, keypointPairsIndices, kp_meta_batch)
+					
 			if(trainOrTest and not generateConnectionsAfterPropagating):	#debug only
 				self.addNormalisedSnapshotToDatabase(normalisedSnapshots, classTargets, keypointPairsValid, keypointPairsIndices, kp_meta_batch)
 				if(ATNLPsnapshotDatabaseRamDynamic):
-					ATNLPpt_database.finaliseTrainedSnapshotDatabase(self)
+					self.finaliseTrainedSnapshotDatabase()
 				
 			# -----------------------------
 			# Prediction
 			# -----------------------------
 			if(not trainOrTest or ATNLPsnapshotDatabaseRamDynamic):
-				if(ATNLPsnapshotDatabaseDisk):
+				if(ATNLPsnapshotDatabaseDiskCompareChunks):
 					comparisonFound, unit_sim, top_cls, avg_sim = ATNLPpt_comparison.compare_1d_batches_stream_db(self, normalisedSnapshots, B1, keypointPairsIndices, kp_meta_batch, chunk_nnz=ATNLPsnapshotDatabaseDiskCompareChunksSize, device=device, shiftInvariantPixels=ATNLPcomparisonShiftInvariancePixels)
 				else:
 					comparisonFound, unit_sim, top_cls, avg_sim = ATNLPpt_comparison.compare_1d_batches(self, normalisedSnapshots, B1, keypointPairsIndices, kp_meta_batch, chunk=ATNLPsnapshotCompareChunkSize, device=device, shiftInvariantPixels=ATNLPcomparisonShiftInvariancePixels)
@@ -206,7 +222,7 @@ class ATNLPmodel(nn.Module):
 				self.addNormalisedSnapshotToDatabase(normalisedSnapshots, classTargets, keypointPairsValid, keypointPairsIndices, kp_meta_batch)
 		
 		if(ATNLPsnapshotDatabaseDisk and trainOrTest):
-			self.closeSnapshotDatabaseWriter()
+			self.closeSnapshotDatabase()
 	
 		accuracy = accuracyAllWindows / numSubsamplesWithKeypoints
 		loss = Loss(0.0)
@@ -214,20 +230,26 @@ class ATNLPmodel(nn.Module):
 		return loss, accuracy
 	
 	if(ATNLPsnapshotDatabaseDisk):
-		def initialiseSnapshotDatabaseWriter(self):
-			global snapshotDatabaseWriters
-			referenceSetDelimiterIDmax = self.getReferenceSetDelimiterIDmax()
-			snapshotDatabaseWriters = [[None for _ in range(S)] for _ in range(referenceSetDelimiterIDmax)]
+		if(ATNLPsnapshotDatabaseDiskCompareChunks):
+			def initialiseSnapshotDatabaseWriter(self):
+				global snapshotDatabaseWriters
+				referenceSetDelimiterIDmax = self.getReferenceSetDelimiterIDmax()
+				snapshotDatabaseWriters = [[None for _ in range(S)] for _ in range(referenceSetDelimiterIDmax)]
 
-		def closeSnapshotDatabaseWriter(self):
-			#TODO: make more efficient (use dict);
-			global snapshotDatabaseWriters
+		def closeSnapshotDatabase(self):
+			#TODO: make more efficient (use dict of referenceSetDelimiterID instead of list by referenceSetDelimiterID)
+			if(ATNLPsnapshotDatabaseDiskCompareChunks):
+				global snapshotDatabaseWriters
 			referenceSetDelimiterIDmax = self.getReferenceSetDelimiterIDmax()
 			for referenceSetDelimiterID in range(referenceSetDelimiterIDmax):
 				for s in range(S):
-					if(snapshotDatabaseWriters[referenceSetDelimiterID][s] is not None):
-						snapshotDatabaseWriters[referenceSetDelimiterID][s].close()
-						snapshotDatabaseWriters[referenceSetDelimiterID][s] = None
+					if(ATNLPsnapshotDatabaseDiskCompareChunks):
+						if(snapshotDatabaseWriters[referenceSetDelimiterID][s] is not None):
+							snapshotDatabaseWriters[referenceSetDelimiterID][s].close()
+							snapshotDatabaseWriters[referenceSetDelimiterID][s] = None
+					else:	
+						if(self.database[referenceSetDelimiterID][s] is not None):
+							ATNLPpt_database.saveSnapshotDatabaseIndex(self, referenceSetDelimiterID, s)
 						#print("snapshotDatabaseWriter close")
 									
 	def deriveCurrentBatchSize(self, batch):
@@ -296,34 +318,34 @@ class ATNLPmodel(nn.Module):
 		else:
 			validSnapshotFound = True
 		return validSnapshotFound
-			
+	
 	def addNormalisedSnapshotToDatabase(self, normalisedSnapshots, classTargets, keypointPairsValid, keypointPairsIndices, kp_meta_batch):
 		B1 = normalisedSnapshots.shape[0]
 		S = normalisedSnapshots.shape[1]
-		if(ATNLPsnapshotDatabaseDisk):
+		if(ATNLPsnapshotDatabaseDiskCompareChunks):
 			global snapshotDatabaseWriters
-			for b1 in range(B1):
-				for s in range(S):
-					if(keypointPairsValid[b1, s]):
-						keypointPairsIndexFirst = keypointPairsIndices[b1, s, 0]
-						referenceSetDelimiterID = self.getReferenceSetDelimiterID(keypointPairsIndexFirst, kp_meta_batch[b1])
-						if(snapshotDatabaseWriters[referenceSetDelimiterID][s] == None):
-							snapshotDatabaseName = ATNLPpt_database.getDatabaseName(referenceSetDelimiterID, s)
-							snapshotDatabaseWriters[referenceSetDelimiterID][s] = ATNLPpt_database.H5DBWriter(snapshotDatabaseName, C, L2)
-						snapshotDatabaseWriter = snapshotDatabaseWriters[referenceSetDelimiterID][s]
-						normalisedSnapshot = normalisedSnapshots[b1][s].unsqueeze(0)
-						classTarget = classTargets[b1][s].unsqueeze(0)
-						snapshotDatabaseWriter.add_batch(normalisedSnapshot, classTarget)
-		elif(ATNLPsnapshotDatabaseRam):
-			for b1 in range(B1):
-				for s in range(S):
-					if(keypointPairsValid[b1, s]):
-						keypointPairsIndexFirst = keypointPairsIndices[b1, s, 0]
-						referenceSetDelimiterID = self.getReferenceSetDelimiterID(keypointPairsIndexFirst, kp_meta_batch[b1])
-						normalisedSnapshot = normalisedSnapshots[b1][s]
-						classTarget = classTargets[b1][s]
-						self.normalisedSnapshot_list[referenceSetDelimiterID][s].append(normalisedSnapshot)
-						self.classTarget_list[referenceSetDelimiterID][s].append(classTarget)
+		for b1 in range(B1):
+			for s in range(S):
+				if(keypointPairsValid[b1, s]):
+					keypointPairsIndexFirst = keypointPairsIndices[b1, s, 0]
+					referenceSetDelimiterID = self.getReferenceSetDelimiterID(keypointPairsIndexFirst, kp_meta_batch[b1])
+					normalisedSnapshot = normalisedSnapshots[b1][s]
+					classTarget = classTargets[b1][s]
+					if(ATNLPindexDatabaseByClassTarget):
+						ATNLPpt_database.add_batch(self, referenceSetDelimiterID, s, normalisedSnapshot, classTarget) 
+					else:
+						if(ATNLPsnapshotDatabaseDisk):
+							if(snapshotDatabaseWriters[referenceSetDelimiterID][s] == None):
+								snapshotDatabaseName = ATNLPpt_database.getDatabaseName(referenceSetDelimiterID, s)
+								pathName = os.path.join(databaseFolderName, snapshotDatabaseName)
+								snapshotDatabaseWriters[referenceSetDelimiterID][s] = ATNLPpt_database.H5DBWriter(pathName, C, L2)
+							snapshotDatabaseWriter = snapshotDatabaseWriters[referenceSetDelimiterID][s]
+							normalisedSnapshot = normalisedSnapshot.unsqueeze(0)	#add temp batch dim
+							classTarget = classTarget.unsqueeze(0)	#add temp batch dim
+							snapshotDatabaseWriter.add_batch(normalisedSnapshot, classTarget) 
+						elif(ATNLPsnapshotDatabaseRam):
+							self.normalisedSnapshot_list[referenceSetDelimiterID][s].append(normalisedSnapshot)
+							self.classTarget_list[referenceSetDelimiterID][s].append(classTarget)
 		
 	def generateClassTargets(self, slidingWindowIndex, normalisedSnapshots, B1, seq_input):
 		#for now just predict final character in sequence window
@@ -338,13 +360,20 @@ class ATNLPmodel(nn.Module):
 				
 	def finaliseTrainedSnapshotDatabase(self):
 		if(ATNLPsnapshotDatabaseDisk):
-			pass	#h5 database is read directly during comparison
+			if(ATNLPindexDatabaseByClassTarget):
+				#ATNLPpt_database.database = None	#should not be required
+				pass
+			else:
+				pass	#h5 database is read directly during comparison
 		else:	
-			ATNLPpt_database.finaliseTrainedSnapshotDatabase(self)	#generate self.database tensor from database for comparison
+			if(ATNLPindexDatabaseByClassTarget):
+				pass	#self.database already loaded in RAM
+			else:
+				ATNLPpt_database.finaliseTrainedSnapshotDatabase(self)	#generate self.database tensor from database for comparison
 	
 	def generateSequenceInput(self, x):
 		if(useNLPcharacterInput):
-			seq_input = x['char_input_ids']	# Tensor [batchSize, sequenceLength]
+			seq_input = x['char_input_ids'].to(device)	# Tensor [batchSize, sequenceLength]
 		else:
 			"""
 			Expand word-piece IDs so every character position gets the ID of the token that covers it.
@@ -353,14 +382,13 @@ class ATNLPmodel(nn.Module):
 				ids_per_char : (B, Lc)  int64
 			"""
 			
-			bert_input_ids = x['bert_input_ids']	# (B, Lb)	 int64
-			bert_offsets = x['bert_offsets']	#(B, Lb, 2)  int64
+			bert_input_ids = x['bert_input_ids'].to(device)	# (B, Lb)	 int64
+			bert_offsets = x['bert_offsets'].to(device)	#(B, Lb, 2)  int64
 			Lc = contextSizeMax
 			pad_id = NLPcharacterInputPadTokenID
 			
 			# ------------------------------------------------------------------
 			B, Lb = bert_input_ids.shape
-			device = bert_input_ids.device
 
 			# 1) Boolean mask saying \u201ctoken j covers char position c\u201d
 			pos = pt.arange(Lc, device=device).view(1, Lc, 1)	  # (1,Lc,1)
@@ -381,7 +409,7 @@ class ATNLPmodel(nn.Module):
 			ids_per_char[no_cover] = pad_id
 			seq_input = ids_per_char
 			
-			#print("seq_input.shape = ", seq_input.shape)
+			print("seq_input.device = ", seq_input.device)
 	
 		return seq_input
 

@@ -64,7 +64,7 @@ if(not ATNLPcomparisonShiftInvariance):
 
 			return sim
 				
-if(ATNLPsnapshotDatabaseDisk):
+if(ATNLPsnapshotDatabaseDiskCompareChunks):
 	if(ATNLPcomparisonShiftInvariance):
 		# ===================================================================== #
 		#  STREAMING, OUT-OF-CORE VARIANT \u2013 loads DB from HDF5 in sparse chunks #
@@ -462,10 +462,10 @@ else:
 						comparisonFound = True
 						print("comparisonFound")
 					else:
-						sim_val = torch.tensor([-1])	#CHECKTHIS
-						sim_id = torch.tensor([0])	#CHECKTHIS
-						sim_class = torch.tensor([-1])	#CHECKTHIS
-						sim = None #torch.zeros((1, 1), device=device)
+						sim_val = torch.tensor([-1], device=device)	#CHECKTHIS
+						sim_id = torch.tensor([0], device=device)	#CHECKTHIS
+						sim_class = torch.tensor([-1], device=device)	#CHECKTHIS
+						sim = None #torch.zeros((1, 1), device=device, device=device)
 						#print("self.database[referenceSetDelimiterID][s] is None")
 					
 					simList.append(sim)
@@ -574,9 +574,9 @@ else:
 						comparisonFound = True
 						print("comparisonFound")
 					else:
-						sim_val = torch.tensor([-1])	#CHECKTHIS
-						sim_id = torch.tensor([0])	#CHECKTHIS
-						sim_class = torch.tensor([-1])	#CHECKTHIS
+						sim_val = torch.tensor([-1], device=device)	#CHECKTHIS
+						sim_id = torch.tensor([0], device=device)	#CHECKTHIS
+						sim_class = torch.tensor([-1], device=device)	#CHECKTHIS
 						sim = None #torch.zeros((1, 1), device=device)
 						#print("self.database[referenceSetDelimiterID][s] is None")
 					
@@ -605,7 +605,7 @@ def calculateTopCls(eps, db_classes, sim, B2sim_vals, B2sim_ids, B2sim_class, B1
 	avg_sim = B2sim_vals.mean(dim=1)		# (B1)
 	top_cls, _ = torch.mode(B2sim_class, dim=1)  # returns (values, indices)	#TODO: find a better method (prioritise B2sim_class[B1, 0] ie nearest reference set class prediction)
 
-	if(ATNLPsnapshotDatabaseDisk):
+	if(ATNLPsnapshotDatabaseDiskCompareChunks):
 		sumsq = sim
 		#unit_sim = (sumsq / (sumsq.sum(dim=1, keepdim=True) + eps)).sqrt()
 		unit_sim = torch.sqrt(sumsq + eps)		# shape (B2,)

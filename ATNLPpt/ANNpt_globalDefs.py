@@ -35,6 +35,8 @@ useAlgorithmATNLP = True
 stateTrainDataset = True
 stateTestDataset = True
 
+saveAndLoadModel = True	#default: True	#else do not save and load model between train and eval	
+
 #cloud execution;
 useCloudExecution = False	#jupyter notebook does not support long cmd output
 if(useCloudExecution):

@@ -123,7 +123,7 @@ def normalise_batch(
 	# ------------------  area-style crop + resize (no loops) --------------- #
 	# 1. gather the relevant rows from the source batch
 	src = seq_tensor[src_ids]							# (B2,C,L1)
-
+	
 	# 2. build a boolean mask for every crop span [start, end]
 	pos	= torch.arange(L1, device=device).view(1,1,L1)		# (1,1,L1)
 	start = keypointPairsCharIdx[:, 0].view(B2,1,1)						# (B2,1,1)

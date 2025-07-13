@@ -38,6 +38,11 @@ import torch as pt
 if pt.cuda.is_available():
 	deviceGPU = pt.device("cuda")
 deviceCPU = pt.device("cpu")
+deviceSparse = deviceGPU
+
+ATNLPindexDatabaseByClassTarget = True	#optional	#overload normalised snapshots with same class target	#orig: False	#TODO: requires normalisation of overloaded snapshots
+ATNLPindexDatabaseByReferenceSetIndex = True	#mandatory	#orig: False
+ATNLPindexDatabaseByReferenceSetDelimiterToken = True	#mandatory	#orig: False
 
 ATNLPnormalisedSnapshotsSparseTensors = True	#mandatory	#required to perform image comparison against a database of any significant size at speed
 ATNLPcomparisonShiftInvariance = False	#default: True	#orig: False	#add redundancy to support incomplete alignment between candidate and database normalised snapshots
@@ -54,20 +59,30 @@ else:
 ATNLPsnapshotDatabaseDisk = False	#slow and high capacity
 ATNLPsnapshotDatabaseRam = True 	#fast and low capacity
 if(ATNLPsnapshotDatabaseDisk):
-	ATNLPsnapshotDatabaseDiskChunkSize = 1000000
-	ATNLPsnapshotDatabaseDiskCompareChunksSize = ATNLPsnapshotDatabaseDiskChunkSize
-	ATNLPsnapshotDatabaseLoadDevice = deviceCPU	#default: deviceCPU	
-	snapshotDatabaseNamePrepend = "train_db"
-	snapshotDatabaseNameExtension = ".h5"
+	if(ATNLPindexDatabaseByClassTarget):
+		ATNLPsnapshotDatabaseDiskCompareChunks = False	#mandatory: False
+	else:
+		ATNLPsnapshotDatabaseDiskCompareChunks = True	#mandatory: True
+	if(ATNLPsnapshotDatabaseDiskCompareChunks):
+		ATNLPsnapshotDatabaseDiskChunkSize = 1000000
+		ATNLPsnapshotDatabaseDiskCompareChunksSize = ATNLPsnapshotDatabaseDiskChunkSize
+		ATNLPsnapshotDatabaseLoadDevice = deviceCPU	#default: deviceCPU	
+		snapshotDatabaseNamePrepend = "train_db"
+		snapshotDatabaseNameExtension = ".h5"
+	else:
+		ATNLPsnapshotCompareChunkSize = None
+		ATNLPsnapshotDatabaseLoadDevice = deviceGPU #default: deviceGPU	
+		snapshotDatabaseNamePrepend = "train_db"
+		snapshotDatabaseNamePrependClass = "train_db_class"
+		snapshotDatabaseNameExtension = ".pkl"
 	ATNLPsnapshotDatabaseRamDynamic = False	#mandatory: False
 elif(ATNLPsnapshotDatabaseRam):
+	ATNLPsnapshotDatabaseDiskCompareChunks = False	#mandatory: False
 	ATNLPsnapshotCompareChunkSize = None	#chunking is advantageous only if the whole flattened database (plus the similarity matrix) cannot fit on your GPU; otherwise chunking just adds loop overhead.
 	ATNLPsnapshotDatabaseLoadDevice = deviceGPU	#default: deviceGPU
-	if(debugATNLPcomparison):
-		ATNLPsnapshotDatabaseRamDynamic = True	#optional #very slow but enables train predictions	#continuously update database tensor (do not use intermediary python list)	#useful for debug (required for prediction performance during train)	#debug only
-	else:
-		ATNLPsnapshotDatabaseRamDynamic = False
-
+	ATNLPsnapshotDatabaseRamDynamic = True	#optional #very slow but enables train predictions	#if(!ATNLPindexDatabaseByClassTarget): continuously update database tensor (do not use intermediary python list)	#useful for debug (required for prediction performance during train)	#debug only
+	saveAndLoadModel = False	#self.database can be large so do not save it to disk
+	
 useSlidingWindow = True	#enables sliding window	#mandatory
 
 bertModelName = "bert-base-uncased"	#bertModelName = "bert-large-uncased"
@@ -145,6 +160,7 @@ workingDrive = '/large/source/ANNpython/ATNLPpt/'
 dataDrive = workingDrive	#'/datasets/'
 
 modelName = 'modelATNLP'
+databaseFolderName = '../database/'
 
 def lexIntToLexString(nlp, lexInt):
 	if lexInt in nlp.vocab.strings:
