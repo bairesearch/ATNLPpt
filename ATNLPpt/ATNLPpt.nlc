@@ -71,3 +71,8 @@ Now assume I used the following database code finaliseTrainedSnapshotDatabase() 
 
 OK, I really do not see the point of using an H5 database if the entire database is loaded into RAM (as a single sparse tensor). What I really want to occur is for the comparison to occur by loading the database in chunks.
 
+---
+ATNLPpt_comparison:ATNLPprediction (o3 prompt):
+
+I have a pytorch sequence (contextual window) divided into r sections, each containing q sparse tensors (called "normalised snapshots") of shape (B2, C, L2), where B2 is the normalised batch size, C is the number of channels (sparsely filled; each channel contains a probabilistic strength value for each token type where the max token id = bertNumberTokenTypes = 30522), and L2 is the length of each normalised snapshot (e.g. 10 tokens). Each (of Q) normalised snapshot in a sequence section has a different absolute length, but they are otherwise end at the same position. Each (of R) section has a different set of Q lengths (in its set of Q normalised snapshots), but they are otherwise positioned in order. I want to train a next token prediction head using a CNN and/or transformer model.
+	

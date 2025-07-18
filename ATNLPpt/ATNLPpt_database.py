@@ -29,7 +29,7 @@ if(ATNLPindexDatabaseByClassTarget):
 if(ATNLPindexDatabaseByClassTarget):
 	def createSnapshotDatabaseIndex(self, referenceSetDelimiterID, s):
 		self.database[referenceSetDelimiterID][s] = ATNLPpt_sparseTensors.createEmptySparseTensor((numberOfClasses, C, L2))
-		self.db_classes[referenceSetDelimiterID][s] = torch.empty((numberOfClasses), dtype=torch.int32, device=device)
+		self.db_classes[referenceSetDelimiterID][s] = torch.zeros((numberOfClasses), dtype=torch.int64, device=ATNLPsnapshotDatabaseLoadDevice)
 
 	def add_batch(self, referenceSetDelimiterID, s, normalisedSnapshot: torch.Tensor, classTarget: int):
 		snapshotDatabaseIndex = self.database[referenceSetDelimiterID][s]
@@ -37,7 +37,7 @@ if(ATNLPindexDatabaseByClassTarget):
 		#print("snapshotDatabaseIndex.device = ", snapshotDatabaseIndex.device)
 		#print("normalisedSnapshot.device = ", normalisedSnapshot.device)
 		ATNLPpt_sparseTensors.addSparseTensorToFirstDimIndex(snapshotDatabaseIndex, normalisedSnapshot, classTarget) 	#replaceAllSparseTensorElementsAtFirstDimIndex
-		snapshotDatabaseClassesIndex[classTarget] = classTarget
+		snapshotDatabaseClassesIndex[classTarget] += 1
 
 	if(ATNLPsnapshotDatabaseDisk):
 
@@ -72,7 +72,7 @@ if(ATNLPindexDatabaseByClassTarget):
 		def loadTensor(folderName, fileName):
 			pathName = os.path.join(folderName, fileName)
 			tensor = pt.load(pathName)
-			tensor = tensor.to(device)
+			tensor = tensor.to(ATNLPsnapshotDatabaseLoadDevice)
 			return tensor
 		
 		def loadSnapshotDatabaseIndices(self, normalisedSnapshots, keypointPairsValid, keypointPairsIndices, kp_meta_batch):
@@ -147,7 +147,7 @@ else:
 						if not img.is_coalesced(): # guarantee a well-formed COO before .indices()
 							img = img.coalesce()
 						coords = img.indices()		# (2, nnz_img)  [channel, pos]
-						vals   = img.values()		 # (nnz_img,)
+						vals = img.values()		 # (nnz_img,)
 
 						nnz_img = vals.size(0)
 						if nnz_img == 0:
@@ -206,11 +206,7 @@ else:
 						indices_all = torch.cat(indices_cat, dim=1)
 						values_all  = torch.cat(values_cat, dim=0)
 
-						self.database[referenceSetDelimiterID][s] = torch.sparse_coo_tensor(
-							indices_all, values_all,
-							size=(len(normalisedSnapshot_list), C, L),
-							dtype=values_all.dtype, device=values_all.device
-						).coalesce().to(ATNLPsnapshotDatabaseLoadDevice)
+						self.database[referenceSetDelimiterID][s] = torch.sparse_coo_tensor(indices_all, values_all, size=(len(normalisedSnapshot_list), C, L), dtype=values_all.dtype, device=values_all.device).coalesce().to(ATNLPsnapshotDatabaseLoadDevice)
 						self.db_classes[referenceSetDelimiterID][s] = torch.stack(classTarget_list).to(ATNLPsnapshotDatabaseLoadDevice)		 # (B3,)
 
 def getDatabaseName(referenceSetDelimiterID, s):
@@ -218,7 +214,7 @@ def getDatabaseName(referenceSetDelimiterID, s):
 	return snapshotDatabaseName
 
 def getDatabaseClassName(referenceSetDelimiterID, s):
-	snapshotDatabaseClassName = snapshotDatabaseNamePrependClass + "refSetDelID" + str(referenceSetDelimiterID) + "S" + str(s) + snapshotDatabaseNameExtension
+	snapshotDatabaseClassName = snapshotDatabaseNamePrependNumber + "refSetDelID" + str(referenceSetDelimiterID) + "S" + str(s) + snapshotDatabaseNameExtension
 	return snapshotDatabaseClassName
 
 

@@ -144,11 +144,11 @@ if(ATNLPsnapshotDatabaseDiskCompareChunks):
 					keypointPairsIndexFirst = keypointPairsIndices[b1, s, 0]
 					referenceSetDelimiterID = self.getReferenceSetDelimiterID(keypointPairsIndexFirst, kp_meta_batch[b1])
 					h5_path = ATNLPpt_database.getDatabaseName(referenceSetDelimiterID, s)
-					b2 = b1*B1 + s	#CHECKTHIS
+					b2 = b1*B1 + s
 					
 					# ---- open HDF5 once and stream by nnz slices ------------------------
 					if os.path.isfile(h5_path):
-						with h5py.File(h5_path, "r") as h5:
+						with h5py.File(h5_path, "R") as h5:
 							ptr_ds	= h5["img_ptr"]			  # (B3+1,)
 							class_ds = torch.from_numpy(h5["classes"][...]).to(torch.int64)
 							val_ds	 = h5["values"]
@@ -275,11 +275,11 @@ if(ATNLPsnapshotDatabaseDiskCompareChunks):
 					keypointPairsIndexFirst = keypointPairsIndices[b1, s, 0]
 					referenceSetDelimiterID = self.getReferenceSetDelimiterID(keypointPairsIndexFirst, kp_meta_batch[b1])
 					h5_path = ATNLPpt_database.getDatabaseName(referenceSetDelimiterID, s)
-					b2 = b1*B1 + s	#CHECKTHIS
+					b2 = b1*B1 + s
 
 					# ---- open HDF5 once ----------------------------------------------------
 					if os.path.isfile(h5_path):
-						with h5py.File(h5_path, "r") as h5:
+						with h5py.File(h5_path, "R") as h5:
 							ptr_ds	= h5["img_ptr"]	  # (B3+1,)
 							class_ds = torch.from_numpy(np.asarray(h5["classes"], dtype=np.int64))
 							B3 = class_ds.numel()
@@ -376,7 +376,7 @@ else:
 			B2 = B1*S	
 			device = torch.device(device)
 			candidates = candidates.to(device, dtype=torch.float32)						   # snapshots per sample
-
+		
 			simList = []
 			B2sim_valsList = []
 			B2sim_idsList = []
@@ -386,10 +386,15 @@ else:
 					keypointPairsIndexFirst = keypointPairsIndices[b1, s, 0]
 					referenceSetDelimiterID = self.getReferenceSetDelimiterID(keypointPairsIndexFirst, kp_meta_batch[b1])	
 					if(self.database[referenceSetDelimiterID][s] is not None):
-						candidate = candidates[b1, s].unsqueeze(0).coalesce()	#legacy code expects B2 dimension (set to 1)
+						candidate = candidates[b1, s].unsqueeze(0).coalesce()	# shape (1, C, L) 	#legacy code expects B2 dimension (set to 1)	
 						database = self.database[referenceSetDelimiterID][s].to(ATNLPsnapshotDatabaseLoadDevice, dtype=torch.float32)	# shape (B3, C, L)   - B3 >> B2	
-						db_classes = self.db_classes[referenceSetDelimiterID][s].to(device)	# shape (B3,)  - int64 class targets
-						b2 = b1*B1 + s	#CHECKTHIS
+						if(ATNLPindexDatabaseByClassTarget):
+							db_classes = torch.arange(0, numberOfClasses, dtype=torch.int64, device=device)	# shape (B3,)  - int64 class targets
+							databaseOverloadNumber = self.db_classes[referenceSetDelimiterID][s].to(device)	# shape (B3)  - int64
+							database = renormalise(database, databaseOverloadNumber)	#renormalise transformed snapshots by overload number
+						else:
+							db_classes = self.db_classes[referenceSetDelimiterID][s].to(device)	# shape (B3,)  - int64 class targets
+						b2 = b1*B1 + s
 
 						B3 = database.shape[0]
 						K = (L - 1) if shiftInvariantPixels is None else int(shiftInvariantPixels)
@@ -540,10 +545,15 @@ else:
 					keypointPairsIndexFirst = keypointPairsIndices[b1, s, 0]
 					referenceSetDelimiterID = self.getReferenceSetDelimiterID(keypointPairsIndexFirst, kp_meta_batch[b1])
 					if(self.database[referenceSetDelimiterID][s] is not None):
-						candidate = candidates[b1, s].unsqueeze(0).coalesce()	#legacy code expects B2 dimension (set to 1)
+						candidate = candidates[b1, s].unsqueeze(0).coalesce()	# shape (1, C, L) 	#legacy code expects B2 dimension (set to 1)	
 						database = self.database[referenceSetDelimiterID][s].to(ATNLPsnapshotDatabaseLoadDevice, dtype=torch.float32)	# shape (B3, C, L)   - B3 >> B2
-						db_classes = self.db_classes[referenceSetDelimiterID][s].to(device)	# shape (B3,)  - int64 class targets
-						b2 = b1*B1 + s	#CHECKTHIS
+						if(ATNLPindexDatabaseByClassTarget):
+							db_classes = torch.arange(0, numberOfClasses, dtype=torch.int64, device=device)	# shape (B3,)  - int64 class targets
+							databaseOverloadNumber = self.db_classes[referenceSetDelimiterID][s].to(device)	# shape (B3)  - int64
+							database = renormalise(database, databaseOverloadNumber)	#renormalise transformed snapshots by overload number
+						else:
+							db_classes = self.db_classes[referenceSetDelimiterID][s].to(device)	# shape (B3,)  - int64 class targets
+						b2 = b1*B1 + s
 
 						B3, C2, L2 = database.shape
 						assert C == C2 and L == L2, "Candidates and database must have identical C and L"
@@ -593,6 +603,22 @@ else:
 				unit_sim, top_cls, avg_sim = calculateTopCls(eps, db_classes, sim, B2sim_vals, B2sim_ids, B2sim_class, B1, B2, S)
 			
 			return comparisonFound, unit_sim, top_cls, avg_sim
+
+def renormalise(database, databaseOverloadNumber):
+	if(ATNLPrenormaliseTransformedSnapshots):
+		#renormalise database transformed snapshots by overload number
+		#database.shape = shape (B3, C, L) - sparse COO tensor
+		#databaseOverloadNumber.shape = (B3) - dense tensor
+
+		database = database.coalesce()            # unique-index form
+		inds = database._indices()                # (3, nnz)
+		vals = database._values()                 # (nnz,)
+
+		scale = databaseOverloadNumber     # (B3,)
+		vals.div_(scale.index_select(0, inds[0]) )                 # in-place
+
+		database = torch.sparse_coo_tensor(inds, vals, database.size(), device=database.device)
+	return database
 
 def calculateTopCls(eps, db_classes, sim, B2sim_vals, B2sim_ids, B2sim_class, B1, B2, S):
 

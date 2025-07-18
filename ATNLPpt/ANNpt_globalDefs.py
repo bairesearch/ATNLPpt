@@ -35,7 +35,7 @@ useAlgorithmATNLP = True
 stateTrainDataset = True
 stateTestDataset = True
 
-saveAndLoadModel = True	#default: True	#else do not save and load model between train and eval	
+saveAndLoadModel = True	#default: True	#else do not save and load model between train and eval
 
 #cloud execution;
 useCloudExecution = False	#jupyter notebook does not support long cmd output
@@ -58,6 +58,8 @@ dataloaderMaintainBatchSize = True
 dataloaderRepeat = False
 
 optimiserAdam = True
+optimiserAdamW = False
+optimiserSGD = False
 
 #initialise (dependent vars);
 useCustomWeightInitialisation = False
@@ -69,7 +71,8 @@ useCPU = False
 
 trainLocal = False
 trainGreedy = False
-trainIndividialSamples = False
+trainLocalIndividialLayersSamples = False
+trainLocalIndividialLayers = True
 
 useLinearSublayers = False	#use multiple independent sublayers per linear layer	#optional
 if(useLinearSublayers):

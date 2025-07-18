@@ -82,25 +82,29 @@ def main():
 		processDataset(False, dataset[datasetSplitNameTest], model)
 
 def createOptimizer():
-	if(optimiserAdam):
+	if(optimiserAdamW):
+		optim = torch.optim.AdamW(model.parameters(), lr=learningRate, weight_decay=weightDecay)
+	elif(optimiserAdam):
 		optim = torch.optim.Adam(model.parameters(), lr=learningRate, weight_decay=weightDecay)
-	else:
+	elif(optimiserSGD):
 		optim = torch.optim.SGD(model.parameters(), lr=learningRate, momentum=momentum, weight_decay=weightDecay)
 	return optim
 
 def createOptimiser(model):
 	if(trainLocal):
-		if(trainIndividialSamples):
+		if(trainLocalIndividialLayersSamples):
 			optim = [[None for layerIndex in range(model.config.numberOfLayers) ] for sampleIndex in range(batchSize)]
 			for sampleIndex in range(batchSize):
 				for layerIndex in range(model.config.numberOfLayers):
 					optimSampleLayer = torch.optim.Adam(model.parameters(), lr=learningRate)
 					optim[sampleIndex][layerIndex] = optimSampleLayer
-		else:
+		elif(trainLocalIndividialLayers):
 			optim = [None]*model.config.numberOfLayers
 			for layerIndex in range(model.config.numberOfLayers):
 				optimLayer = torch.optim.Adam(model.parameters(), lr=learningRate)
 				optim[layerIndex] = optimLayer
+		else:
+			optim = torch.optim.Adam(model.parameters(), lr=learningRate)
 	else:
 		optim = torch.optim.Adam(model.parameters(), lr=learningRate)
 	return optim
@@ -271,7 +275,8 @@ def trainBatch(batchIndex, batch, model, optim, l=None, fieldTypeList=None):
 	if(saveAndLoadModel):
 		if(batchIndex % modelSaveNumberOfBatches == 0):
 			saveModel(model)
-	loss = loss.item()
+	if(not trainLocal):
+		loss = loss.item()
 	
 	return loss, accuracy
 			
@@ -279,8 +284,9 @@ def testBatch(batchIndex, batch, model, l=None, fieldTypeList=None):
 		
 	loss, accuracy = propagate(False, batchIndex, batch, model, None, l, fieldTypeList)
 
-	loss = loss.item()
-	#loss = loss.detach().cpu().numpy()
+	if(not trainLocal):
+		loss = loss.item()
+		#loss = loss.detach().cpu().numpy()
 	
 	return loss, accuracy
 

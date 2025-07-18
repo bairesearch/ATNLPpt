@@ -22,8 +22,8 @@ ATNLPpt keypoints
 #   (2) key-points are obtained with spaCy; we store POS, start & end char
 #   (3) generate key-point pairs:
 #		 a) dev  : every ordered pair
-#		 b) train: last r adjacent pairs
-#		 c) eval : last r starts, span size 2->q		  -> see _make_pairs()
+#		 b) train: last R adjacent pairs
+#		 c) eval : last R starts, span size 2->Q		  -> see _make_pairs()
 #	   Missing pairs are zero-filled as required
 # 
 
@@ -34,6 +34,7 @@ from ANNpt_globalDefs import *
 import torch
 import torch.nn.functional as F
 import spacy
+import os, csv
 from typing import List, Dict, Tuple, Literal
 
 nlp = spacy.load("en_core_web_sm", disable=("ner", "parser", "lemmatizer"))
@@ -42,21 +43,79 @@ referenceSetPosDelimitersTagId = [posStringToPosInt(nlp, string) for string in r
 verbPosId = posStringToPosInt(nlp, "VERB")
 prepositionPosId = posStringToPosInt(nlp, "ADP")
 punctPosId = posStringToPosInt(nlp, "PUNCT")
+VERB_DICT_PATH = "verb_dict.csv"
+PREP_DICT_PATH = "prep_dict.csv"
 
-print("loading verb_dict from nlp.vocab.strings; this will take approximately 1 minute")
-verb_dict = {}
-prep_dict = {}
-for word in list(nlp.vocab.strings):
-	if not word.isalpha():
-		continue
-	doc = nlp(word)
-	if not doc:  # skip empty parses
-		continue
-	tok = doc[0]
-	if tok.pos_ == "VERB":
-		verb_dict[word] = len(verb_dict)
-	elif tok.pos_ == "ADP":
-		prep_dict[word] = len(prep_dict)
+def loadReferenceSetDelimDicts():
+	# -------------------------------------------------
+	# 1. Attempt to load cached dicts
+	# -------------------------------------------------
+	if os.path.isfile(VERB_DICT_PATH) and os.path.isfile(PREP_DICT_PATH):
+		print("loading verb_dict  prep_dict from disk \u2026")
+		verb_dict, prep_dict = {}, {}
+
+		with open(VERB_DICT_PATH, newline='', encoding='utf-8') as f:
+			reader = csv.reader(f)
+			next(reader, None)	# skip optional header
+			for word, idx in reader:
+				verb_dict[word] = int(idx)
+
+		with open(PREP_DICT_PATH, newline='', encoding='utf-8') as f:
+			reader = csv.reader(f)
+			next(reader, None)
+			for word, idx in reader:
+				prep_dict[word] = int(idx)
+		result = True
+	else:
+		verb_dict = None
+		prep_dict = None
+		result = False
+		
+	return result, verb_dict, prep_dict
+	
+def generateReferenceSetDelimDicts():
+	# -------------------------------------------------
+	# 2. Rebuild dicts from spaCy vocab and cache them
+	# -------------------------------------------------
+	print("building verb_dict  prep_dict from nlp.vocab.strings; this will take approximately 1 minute")
+	verb_dict = {}
+	prep_dict = {}
+
+	for word in list(nlp.vocab.strings):
+		if not word.isalpha():
+			continue
+		doc = nlp(word)
+		if not doc:	# skip empty parses
+			continue
+		tok = doc[0]
+		if tok.pos_ == "VERB":
+			verb_dict[word] = len(verb_dict)
+		elif tok.pos_ == "ADP":
+			prep_dict[word] = len(prep_dict)
+			
+	return verb_dict, prep_dict
+		
+def saveReferenceSetDelimDicts(verb_dict, prep_dict):
+	# -------------------------------------------------
+	# 3. Save dicts to cache
+	# -------------------------------------------------
+	# Cache to CSV for future runs
+	with open(VERB_DICT_PATH, "w", newline='', encoding='utf-8') as f:
+		writer = csv.writer(f)
+		writer.writerow(["word", "idx"])
+		for w, i in verb_dict.items():
+			writer.writerow([w, i])
+
+	with open(PREP_DICT_PATH, "w", newline='', encoding='utf-8') as f:
+		writer = csv.writer(f)
+		writer.writerow(["word", "idx"])
+		for w, i in prep_dict.items():
+			writer.writerow([w, i])
+
+result, verb_dict, prep_dict = loadReferenceSetDelimDicts()
+if(not result):
+	verb_dict, prep_dict = generateReferenceSetDelimDicts()
+	saveReferenceSetDelimDicts(verb_dict, prep_dict)
 #print("verb_dict = ", verb_dict)
 
 
@@ -137,13 +196,13 @@ def insert_keypoints_last_token(
 # ------------------------------------------------------------------------- #
 # (3)  build key-point pairs for dev | train | eval modes				   #
 # ------------------------------------------------------------------------- #
-def make_pairs(kp: List[int], mode: keypointModes, r: int, q: int) -> Tuple[torch.Tensor, torch.Tensor]:
+def make_pairs(kp: List[int], mode: keypointModes, R: int, Q: int) -> Tuple[torch.Tensor, torch.Tensor]:
 	"""
 	Parameters
 	----------
 	kp   : sorted list of key-point token indices
 	mode : "allKeypointCombinations" | "firstKeypointConsecutivePairs" | "firstKeypointPairs"
-	r/q  : user parameters (see requirement 3)
+	R/Q  : user parameters (see requirement 3)
 
 	Return
 	------
@@ -154,59 +213,57 @@ def make_pairs(kp: List[int], mode: keypointModes, r: int, q: int) -> Tuple[torc
 	if len(kp) < 2:
 		# zero-fill for the expected number of rows so caller can reshape
 		if mode == "firstKeypointConsecutivePairs":
-			N = r
+			N = R
 		elif mode == "firstKeypointPairs":
-			N = r * (q - 1)
+			N = R * (Q - 1)
 		elif mode == "allKeypointCombinations":		 # we let it be empty
 			N = 0
 		pairs = torch.zeros(N, 2, dtype=torch.long)
 		valid = torch.zeros(N, dtype=torch.bool)
-		return pairs, valid
-		
-	# ------------  a) every ordered permutation -------------------- #
-	if mode == "allKeypointCombinations":
-		out = [(i, j) for idx_i, i in enumerate(kp) for j in kp[idx_i + 1:]]
-		pairs = torch.as_tensor(out, dtype=torch.long)
-		pairs = torch.sort(pairs, dim=1).values	# ensure i < j so downstream code always receives [start, end]
-		valid = pairs[:, 0] != pairs[:, 1]
-		return pairs, valid
-
-	# ------------  b) last r adjacent pairs ---------------------- #
-	if mode == "firstKeypointConsecutivePairs":
-		adj = list(zip(kp[:-1], kp[1:]))			   # consecutive pairs
-		adj = adj[:r]								 # keep the *first* r
-		valid_n = len(adj)
-		# zero-padding to fixed length r
-		pairs = torch.zeros(r, 2, dtype=torch.long)
-		if valid_n:
-			pairs[:valid_n] = torch.as_tensor(adj, dtype=torch.long)
-			pairs[:valid_n] = torch.sort(pairs[:valid_n], dim=1).values	# ensure i < j so downstream code always receives [start, end]
-		valid = torch.zeros(r, dtype=torch.bool)
-		valid = pairs[:, 0] != pairs[:, 1]
-		return pairs, valid
-
-	# ------------  c) last r starts, spans 2 -> q ------------------ #
-	if mode == "firstKeypointPairs":
-		out = []
-		starts = kp[:r]								# first r starts
-		for s_idx, s in enumerate(starts):
-			# pick up to q-1 subsequent key-points
-			next_kps = kp[s_idx + 1 : s_idx + 1 + (q - 1)]
-			if not next_kps:							# none available
-				out.extend([(0, 0)] * (q - 1))
-			else:
-				# pad to q-1 so output length is constant
-				for t in range(q - 1):
-					if t < len(next_kps):
-						out.append((s, next_kps[t]))
-					else:
-						out.append((0, 0))
-		pairs = torch.as_tensor(out, dtype=torch.long)		  # (r*(q-1), 2)
-		pairs = torch.sort(pairs, dim=1).values	# ensure i < j so downstream code always receives [start, end]
+	else:
+		# ------------  a) every ordered permutation -------------------- #
+		if mode == "allKeypointCombinations":
+			out = [(i, j) for idx_i, i in enumerate(kp) for j in kp[idx_i + 1:]]
+			pairs = torch.as_tensor(out, dtype=torch.long)
+			pairs = torch.sort(pairs, dim=1).values	# ensure i < j so downstream code always receives [start, end]
+		# ------------  b) last R adjacent pairs ---------------------- #
+		elif mode == "firstKeypointConsecutivePairs":
+			adj = list(zip(kp[:-1], kp[1:]))			   # consecutive pairs
+			adj = adj[:R]								 # keep the *first* R
+			valid_n = len(adj)
+			# zero-padding to fixed length R
+			pairs = torch.zeros(R, 2, dtype=torch.long)
+			if valid_n:
+				pairs[:valid_n] = torch.as_tensor(adj, dtype=torch.long)
+				pairs[:valid_n] = torch.sort(pairs[:valid_n], dim=1).values	# ensure i < j so downstream code always receives [start, end]
+			valid = torch.zeros(R, dtype=torch.bool)
+		# ------------  c) last R starts, spans 2 -> Q ------------------ #
+		elif mode == "firstKeypointPairs":
+			out = []
+			starts = kp[:R]								# first R starts
+			for s_idx, s in enumerate(starts):
+				# pick up to Q-1 subsequent key-points
+				next_kps = kp[s_idx + 1 : s_idx + 1 + (Q - 1)]
+				if not next_kps:							# none available
+					out.extend([(0, 0)] * (Q - 1))
+				else:
+					# pad to Q-1 so output length is constant
+					for t in range(Q - 1):
+						if t < len(next_kps):
+							out.append((s, next_kps[t]))
+						else:
+							out.append((0, 0))
+			pairs = torch.as_tensor(out, dtype=torch.long)		  # (R*(Q-1), 2)
+			pairs = torch.sort(pairs, dim=1).values	# ensure i < j so downstream code always receives [start, end]
+		else:
+			raise ValueError(f"Unknown mode {mode}")
 		valid = (pairs[:, 0] != pairs[:, 1])
-		return pairs, valid
 
-	raise ValueError(f"Unknown mode {mode}")
-
-
+	if reorderPairsToBeNotReversed and pairs.numel():
+		_max = pairs.max().item() + 1
+		order = torch.argsort(pairs[:, 0] * _max + pairs[:, 1])
+		pairs = pairs[order]
+		valid = valid[order]
+	
+	return pairs, valid
 

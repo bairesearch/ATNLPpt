@@ -38,12 +38,25 @@ import torch as pt
 if pt.cuda.is_available():
 	deviceGPU = pt.device("cuda")
 deviceCPU = pt.device("cpu")
-deviceSparse = deviceGPU
 
-ATNLPindexDatabaseByClassTarget = True	#optional	#overload normalised snapshots with same class target	#orig: False	#TODO: requires normalisation of overloaded snapshots
-ATNLPindexDatabaseByReferenceSetIndex = True	#mandatory	#orig: False
-ATNLPindexDatabaseByReferenceSetDelimiterToken = True	#mandatory	#orig: False
+ATNLPusePredictionHead = True	#use ML model (CNN/transformer) as a next token prediction head
+if(ATNLPusePredictionHead):
+	reorderPairsToBeNotReversed = True	#default: True - prediction head may expect ordered normalised snapshots as input 
+	optimiserAdamW = True
+	useCustomLearningAlgorithm = False
+	trainLocalIndividialLayers = False	#train once per prediction head model execution
+	d_model = 128	#normalised snapshot token encoding size
+else:
+	useCustomLearningAlgorithm = True	#mandatory (disable all backprop optimisers)
+	reorderPairsToBeNotReversed = False	#default: False (process last normalised snapshot first as this is special; it is only defined by 1 reference set delimiter keypoint)
+trainLocal = True	#local learning rule	#required
 
+ATNLPindexDatabaseByClassTarget = True	#optional	#overload normalised snapshots with same class target	#orig: False
+ATNLPindexDatabaseByReferenceSetIndex = True	#mandatory: True	#orig: False
+ATNLPindexDatabaseByReferenceSetDelimiterToken = True	#mandatory: True	#orig: False
+if(ATNLPindexDatabaseByClassTarget):
+	ATNLPrenormaliseTransformedSnapshots = False	#default: True	- incomplete (requires suitable renormalisation function) #currently renormalises transformed snapshots by overload number	#explore other renomalisation functions, eg tanh (this has problems), changing all normalised snapshots to binary, etc
+	
 ATNLPnormalisedSnapshotsSparseTensors = True	#mandatory	#required to perform image comparison against a database of any significant size at speed
 ATNLPcomparisonShiftInvariance = False	#default: True	#orig: False	#add redundancy to support incomplete alignment between candidate and database normalised snapshots
 ATNLPcomparisonShiftInvariancePixels = None
@@ -73,7 +86,7 @@ if(ATNLPsnapshotDatabaseDisk):
 		ATNLPsnapshotCompareChunkSize = None
 		ATNLPsnapshotDatabaseLoadDevice = deviceGPU #default: deviceGPU	
 		snapshotDatabaseNamePrepend = "train_db"
-		snapshotDatabaseNamePrependClass = "train_db_class"
+		snapshotDatabaseNamePrependNumber = "train_db_number"
 		snapshotDatabaseNameExtension = ".pkl"
 	ATNLPsnapshotDatabaseRamDynamic = False	#mandatory: False
 elif(ATNLPsnapshotDatabaseRam):
@@ -82,6 +95,7 @@ elif(ATNLPsnapshotDatabaseRam):
 	ATNLPsnapshotDatabaseLoadDevice = deviceGPU	#default: deviceGPU
 	ATNLPsnapshotDatabaseRamDynamic = True	#optional #very slow but enables train predictions	#if(!ATNLPindexDatabaseByClassTarget): continuously update database tensor (do not use intermediary python list)	#useful for debug (required for prediction performance during train)	#debug only
 	saveAndLoadModel = False	#self.database can be large so do not save it to disk
+deviceSparse = ATNLPsnapshotDatabaseLoadDevice
 	
 useSlidingWindow = True	#enables sliding window	#mandatory
 
@@ -118,19 +132,19 @@ L2 = 10	#default: 10	#normalisation length for each reference set
 
 #keypoint extraction vars;
 keypointModes = Literal["allKeypointCombinations", "firstKeypointConsecutivePairs", "firstKeypointPairs"]
-r = 3	#the last r (user defined) set of 2 consecutive keypoints in batch sequence
-q = 4   #the last r (user defined) set of 2 keypoints (of distance 2->q) in batch sequence               
+R = 3	#the last R (user defined) set of 2 consecutive keypoints in batch sequence
+Q = 1   #the last R (user defined) set of 2 keypoints (of distance 2->Q) in batch sequence               
 
 #referenceSetPosDelimitersPosStr = {"PUNCT", "VERB", "ADP"}
 #referenceSetPosDelimitersPosStr = {"PUNCT", "VERB"}
 ##referenceSetPosDelimitersTagStr = {".", "VB", "VBD", "VBG", "VBN", "VBP", "VBZ", "IN", "TO", "CC", ",", ";"}       # identical to TF version
 referenceSetPosDelimitersTagStr = {".", "VB", "VBD", "VBG", "VBN", "VBP", "VBZ"}	#verbs only	#TODO: collapse auxiliary verbs (eg tagged as VBZ/VBD) with adjacent VBN into single ref set delimiter; eg has [VBZ] run [VBN], had [VBD] gone [VBN] -> has_run [VBZ], had_gone [VBD]
-keypointMode="firstKeypointConsecutivePairs"	 #out shape = (B1*r, C, L2)
-#keypointMode="firstKeypointPairs"	 	#out shape = (B1*r*(q-1), C, L2)	#default (requires testing)
+keypointMode="firstKeypointConsecutivePairs"	 #out shape = (B1*R, C, L2)
+#keypointMode="firstKeypointPairs"	 	#out shape = (B1*R*(Q-1), C, L2)	#default (requires testing)
 if(keypointMode == "firstKeypointPairs"):
-	S = r
+	S = R
 elif(keypointMode == "firstKeypointConsecutivePairs"):
-	S = r*(q-1)
+	S = R*(Q-1)
 		
 useNLPDatasetMultipleTokenisation = True	#mandatory: True	#required for spacy tokenisation
 if(useNLPDatasetMultipleTokenisation):
@@ -144,13 +158,10 @@ if(useNLPDatasetMultipleTokenisation):
 	if(useNLPDatasetMultipleTokenisationChar): 
 		useNLPcharacterInputBasic = True	#if True: only use a basic lowercase+punctuation character set of 30 chars, else if False: use a full printable subset of ASCII-128
 		if(useNLPcharacterInputBasic):
-			NLPcharacterInputBasicSet = [' ', 'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z','.','(',')', ',']	#select 31 characters for normalcy
+			NLPcharacterInputBasicSet = [' ', 'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','Q','R','s','t','u','v','w','x','y','z','.','(',')', ',']	#select 31 characters for normalcy
 			NLPcharacterInputSetLen = len(NLPcharacterInputBasicSet)+1	#32	# 0 reserved for PAD (NLPcharacterInputPadTokenID)
 		else:
 			NLPcharacterInputSetLen = 98	  # full printable subset of ASCII-128	# 0 reserved for PAD (NLPcharacterInputPadTokenID)
-
-useCustomLearningAlgorithm = True	#mandatory (disable all backprop optimisers)
-trainLocal = True	#local learning rule	#required
 
 #sublayer paramters:	
 simulatedDendriticBranches = False	#optional	#performTopK selection of neurons based on local inhibition - equivalent to multiple independent fully connected weights per neuron (SDBANN)

@@ -20,8 +20,8 @@ ATNLPpt normalisation
 # PyTorch re-write of ATNLP normalisation with upgrades 1-6:
 #   (4) I/O tensor shapes
 #		 in : (B1, C, L1)
-#		 out: (B2, C, L2)  where B2 = B1*r	  (train)
-#							  or  B1*r*(q-1)	(eval)
+#		 out: (B2, C, L2)  where B2 = B1*R	  (train)
+#							  or  B1*R*(Q-1)	(eval)
 #   (5) No Python loops in the crop/resize - a single grid_sample call
 #		 keypoint_idx is supplied as int tensor (B2, 2)
 #   (6) Uses only PyTorch core - grid_sample provides the 'batch crop + resize'
@@ -41,15 +41,14 @@ NL_MODEL = spacy.load("en_core_web_sm", disable=("ner", "parser", "lemmatizer"))
 # ------------------------------------------------------------------------- #
 # (4)(5)(6)  batch crop + resize with ONE grid_sample call (no loops)	   #
 # ------------------------------------------------------------------------- #
-@torch.no_grad()
 def normalise_batch(
 	seq_tensor: torch.Tensor,		  # (B1, C, L1)
 	spacy_pos : torch.Tensor,		  # (B1, L1)
 	spacy_offsets : torch.Tensor,		  # (B1, L1, 2)
 	last_token_idx: int,
 	mode : keypointModes,
-	r : int,
-	q : int,
+	R : int,
+	Q : int,
 	L2 : int,
 	kp_indices_batch: List[List[int]],
 	kp_meta_batch: List[List[Dict]],
@@ -68,8 +67,8 @@ def normalise_batch(
 	if(debugATNLPnormalisation):
 		print("normalise_batch():")
 		print("seq_tensor.shape = ", seq_tensor.shape)
-		print("r = ", r)
-		print("q = ", q)
+		print("R = ", R)
+		print("Q = ", Q)
 		print("B1 = ", B1)
 		print("C = ", C)
 		print("L1 = ", L1)
@@ -92,11 +91,11 @@ def normalise_batch(
 		character_offsets = spacy_offsets[b]		  # (Ls, 2) start/end
 		kp_use = [character_offsets[idx][0].item() for idx in kp_indices if character_offsets[idx][0].item() < last_token_idx]
 		ATNLPpt_keypoints.insert_keypoints_last_token(last_token_idx, kp_use)
-		keypointPairsCharIdx, keypointPairsValid = ATNLPpt_keypoints.make_pairs(kp_use, mode, r, q)
+		keypointPairsCharIdx, keypointPairsValid = ATNLPpt_keypoints.make_pairs(kp_use, mode, R, Q)
 		
 		kp_use_spacy = [idx for idx in kp_indices if idx < last_spacy_token_idx[b]]		#if character_offsets[idx][0].item() < last_token_idx
 		ATNLPpt_keypoints.insert_keypoints_last_token(last_spacy_token_idx[b], kp_use_spacy)
-		keypointPairsIndices, keypointPairsValid = ATNLPpt_keypoints.make_pairs(kp_use_spacy, mode, r, q)
+		keypointPairsIndices, keypointPairsValid = ATNLPpt_keypoints.make_pairs(kp_use_spacy, mode, R, Q)
 		#currently use keypointPairsValid from keypointPairsIndices (prevents intraReferenceSetDelimiter eg intraverb token prediction)
 
 		if(debugATNLPkeypoints):
@@ -148,9 +147,10 @@ def normalise_batch(
 		print("normalisedSnapshots shape :", tuple(normalisedSnapshots.shape))
 		
 	keypointPairsIndices = keypointPairsIndices.reshape(B1, S, 2)	#(B1, S, 2)
+	keypointPairsCharIdx = keypointPairsCharIdx.reshape(B1, S, 2)	#(B1, S, 2)
 	keypointPairsValid = keypointPairsValid.reshape(B1, S)	#(B1,S)
 	
-	return normalisedSnapshots, keypointPairsValid, keypointPairsIndices
+	return normalisedSnapshots, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid
 
 
 def char_idx_to_spacy_idx(
@@ -203,3 +203,8 @@ def char_idx_to_spacy_idx(
 
 	return last_spacy_token_idx	# (B,) long
 
+
+def generateSnapshotLengths():
+	#use character token indices, not bert token indices or spacy indices]
+	lens = keypointPairsCharIdx[:, :, 1] - keypointPairsCharIdx[:, :, 0]	#keypointPairsCharIdx is of shape (B1, S, 2)
+	lens = lens.reshape(B1, R, Q)	#(B1, R, Q)
