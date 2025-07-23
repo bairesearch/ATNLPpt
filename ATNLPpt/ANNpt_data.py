@@ -718,7 +718,7 @@ elif(useNLPDataset):
 				return out
 			# -------------------------------------------------------------------
 			if(useNLPDatasetMultipleTokenisationChar):
-				char_ids   = pad1d([s["char_input_ids"]   for s in batch], NLPcharacterInputPadTokenID)
+				char_ids   = pad1d([s["char_input_ids"]   for s in batch], NLPpadTokenID)
 			if(useNLPDatasetMultipleTokenisationBert):
 				bert_ids   = pad1d([s["bert_input_ids"]   for s in batch], bert_pad_id)
 				bert_off   = pad2d([s["bert_offsets"]     for s in batch])
@@ -793,7 +793,7 @@ elif(useNLPDataset):
 				if bert_tokenizer is None:
 					bert_tokenizer = AutoTokenizer.from_pretrained(bertModelName, use_fast=True)
 					bert_pad_id	= bert_tokenizer.pad_token_id
-					assert bert_pad_id == NLPcharacterInputPadTokenID
+					assert bert_pad_id == NLPpadTokenID
 				enc = bert_tokenizer(texts, truncation=True, max_length=contextSizeMax, padding=False)
 				if(debugOnlyPrintStreamedWikiArticleTitles):
 					print(batch["title"])
@@ -802,7 +802,7 @@ elif(useNLPDataset):
 		def collate(batch):
 			# batch_size==1 in your new set-up but keep it generic
 			seqs   = [item for item in batch]
-			pad_id = NLPcharacterInputPadTokenID
+			pad_id = NLPpadTokenID
 			max_L  = max(len(s) for s in seqs)
 			padded = pt.full((len(seqs), max_L), pad_id, dtype=pt.long)
 			for i, s in enumerate(seqs):
@@ -867,13 +867,13 @@ elif(useNLPDataset):
 
 		def _build_char_tables():
 			if useNLPcharacterInputBasic:
-				table = {c: i+1 for i, c in enumerate(NLPcharacterInputBasicSet)}  # 0 reserved for PAD (NLPcharacterInputPadTokenID)
+				table = {c: i+1 for i, c in enumerate(NLPcharacterInputBasicSet)}  # 0 reserved for PAD (NLPpadTokenID)
 				rev   = {i+1: c for i, c in enumerate(NLPcharacterInputBasicSet)}
 			else:
 				# Drop all control codes (0-31, 127) but keep whitespace
 				allowed = ascii_printable_with_whitespace()
-				assert len(allowed) == NLPcharacterInputSetLen-1	# -1 explanation; 0 reserved for PAD (NLPcharacterInputPadTokenID)
-				table = {c: idx+1 for idx, c in enumerate(allowed)}	 #0 reserved for PAD (NLPcharacterInputPadTokenID)
+				assert len(allowed) == NLPcharacterInputSetLen-1	# -1 explanation; 0 reserved for PAD (NLPpadTokenID)
+				table = {c: idx+1 for idx, c in enumerate(allowed)}	 #0 reserved for PAD (NLPpadTokenID)
 				rev   = {idx+1: c for idx, c in enumerate(allowed)}
 			return table, rev
 

@@ -37,6 +37,7 @@ import spacy
 import os, csv
 from typing import List, Dict, Tuple, Literal
 
+#load verb_dict/prep_dict (for keypoint detection):
 nlp = spacy.load("en_core_web_sm", disable=("ner", "parser", "lemmatizer"))
 referenceSetPosDelimitersTagId = [posStringToPosInt(nlp, string) for string in referenceSetPosDelimitersTagStr]
 #referenceSetPosDelimitersPosId = [posStringToPosInt(nlp, string) for string in referenceSetPosDelimitersPosStr]
@@ -215,7 +216,7 @@ def make_pairs(kp: List[int], mode: keypointModes, R: int, Q: int) -> Tuple[torc
 		if mode == "firstKeypointConsecutivePairs":
 			N = R
 		elif mode == "firstKeypointPairs":
-			N = R * (Q - 1)
+			N = R * Q
 		elif mode == "allKeypointCombinations":		 # we let it be empty
 			N = 0
 		pairs = torch.zeros(N, 2, dtype=torch.long)
@@ -236,34 +237,85 @@ def make_pairs(kp: List[int], mode: keypointModes, R: int, Q: int) -> Tuple[torc
 			if valid_n:
 				pairs[:valid_n] = torch.as_tensor(adj, dtype=torch.long)
 				pairs[:valid_n] = torch.sort(pairs[:valid_n], dim=1).values	# ensure i < j so downstream code always receives [start, end]
-			valid = torch.zeros(R, dtype=torch.bool)
-		# ------------  c) last R starts, spans 2 -> Q ------------------ #
+			#valid = torch.zeros(R, dtype=torch.bool)
+		# ------------  c) first R starts, next Q key-points ------------------ #
 		elif mode == "firstKeypointPairs":
+			#orig unvectorised version
 			out = []
 			starts = kp[:R]								# first R starts
 			for s_idx, s in enumerate(starts):
-				# pick up to Q-1 subsequent key-points
-				next_kps = kp[s_idx + 1 : s_idx + 1 + (Q - 1)]
+				# pick up to Q subsequent key-points
+				next_kps = kp[s_idx + 1 : s_idx + 1 + (Q)]
 				if not next_kps:							# none available
-					out.extend([(0, 0)] * (Q - 1))
+					out.extend([(0, 0)] * (Q))
 				else:
-					# pad to Q-1 so output length is constant
-					for t in range(Q - 1):
+					# pad to Q so output length is constant
+					for t in range(Q):
 						if t < len(next_kps):
 							out.append((s, next_kps[t]))
 						else:
 							out.append((0, 0))
-			pairs = torch.as_tensor(out, dtype=torch.long)		  # (R*(Q-1), 2)
+			pairs = torch.as_tensor(out, dtype=torch.long)		  # (R*Q, 2)
 			pairs = torch.sort(pairs, dim=1).values	# ensure i < j so downstream code always receives [start, end]
+			'''
+			#vectorised version;
+			# kp -> 1D tensor
+			kp_t = torch.as_tensor(kp, dtype=torch.long, device=device)	# or kp.device if already tensor
+			K = kp_t.numel()
+
+			R = int(R)	# ensure plain ints in case they were tensors
+			Q = int(Q)
+
+			# indices of the first R starts
+			start_vals = kp_t[:R]											# (R,)
+
+			# build matrix of candidate indices into kp: row r -> r+1 ... r+Q
+			row = torch.arange(R, device=kp_t.device).unsqueeze(1)			# (R,1)
+			col = torch.arange(1, Q + 1, device=kp_t.device).unsqueeze(0)	# (1,Q)
+			cand_idx = row + col												# (R,Q)
+
+			valid = cand_idx < K												# (R,Q) mask
+			# clamp to avoid OOB gather; we'll zero-out invalids afterward
+			cand_idx_clamped = cand_idx.clamp_max(K - 1)
+
+			next_vals = kp_t[cand_idx_clamped]								# (R,Q)
+			next_vals = next_vals.masked_fill(~valid, 0)
+
+			# repeat starts to align with next_vals
+			start_repeat = start_vals.unsqueeze(1).expand(-1, Q)				# (R,Q)
+
+			pairs = torch.stack((start_repeat, next_vals), dim=-1)			# (R,Q,2)
+			pairs = pairs.view(-1, 2)										# (R*Q,2)
+			pairs = torch.sort(pairs, dim=1).values							# ensure i<j
+			'''
 		else:
 			raise ValueError(f"Unknown mode {mode}")
 		valid = (pairs[:, 0] != pairs[:, 1])
 
-	if reorderPairsToBeNotReversed and pairs.numel():
-		_max = pairs.max().item() + 1
-		order = torch.argsort(pairs[:, 0] * _max + pairs[:, 1])
-		pairs = pairs[order]
-		valid = valid[order]
+		if reorderPairsToBeNotReversed and pairs.numel():
+			_max = pairs.max().item() + 1
+			order = torch.argsort(pairs[:, 0] * _max + pairs[:, 1])
+			pairs = pairs[order]
+			valid = valid[order]
 	
+	S = valid.shape[0]
+	if(S < R*Q):
+		#expand normalisedSnapshots with zeros if number keypoint pairs < R*Q
+		#always assume Q is constant (already padded if necessary by make_pairs)
+		Rcurrent = S//Q
+		Rpad = R-Rcurrent
+		if(Rpad > 0):
+			Spad = Rpad*Q
+			pairsPad = torch.zeros((Spad, 2), dtype=torch.long, device=pairs.device)
+			validPad = torch.full((Spad,), False, dtype=torch.bool, device=valid.device)
+			if(useSlidingWindow):
+				#left pad;
+				pairs = torch.cat((pairsPad, pairs), dim=0)
+				valid = torch.cat((validPad, valid), dim=0)
+			else:
+				#right pad;
+				pairs = torch.cat((pairs, pairsPad), dim=0)
+				valid = torch.cat((valid, validPad), dim=0)
+
 	return pairs, valid
 

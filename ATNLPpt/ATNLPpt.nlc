@@ -75,4 +75,32 @@ OK, I really do not see the point of using an H5 database if the entire database
 ATNLPpt_comparison:ATNLPprediction (o3 prompt):
 
 I have a pytorch sequence (contextual window) divided into r sections, each containing q sparse tensors (called "normalised snapshots") of shape (B2, C, L2), where B2 is the normalised batch size, C is the number of channels (sparsely filled; each channel contains a probabilistic strength value for each token type where the max token id = bertNumberTokenTypes = 30522), and L2 is the length of each normalised snapshot (e.g. 10 tokens). Each (of Q) normalised snapshot in a sequence section has a different absolute length, but they are otherwise end at the same position. Each (of R) section has a different set of Q lengths (in its set of Q normalised snapshots), but they are otherwise positioned in order. I want to train a next token prediction head using a CNN and/or transformer model.
-	
+
+---
+ATNLPpt_comparison:ATNLPprediction (!useSlidingWindow:backboneType="transformer") (o3 prompt):
+
+1. I have now upgraded the framework to not use a sliding window during training if backboneType = "transformer", because I want to simultaneously train every next token prediction (to speed up the training process);
+a) upgrade TransformerBackbone accordingly.
+b) I assume that a sliding window will still be required to train CausalCNNBackbone (please confirm this). 
+Assume you have a bool variable trainOrTest which defines whether the model is being executed in train or eval mode. 
+2. Maintain the existing input embedding generation code (DenseSnapshotEncoder), this is fine - it produces output of shape (B2, Q, R, L2, d_model).
+3. Upgrade the backbone code; 
+a) upgrade TransformerBackbone to assume the transformer input is now of shape (B2*Q, R, L2*d), where B2*Q is the new batch size, R is the new sequence length, L2*d is the new input embedding size.
+b) upgrade CausalCNNBackbone to assume the CNN input is now of shape (B2*Q*R, d, L2), where B2*Q*R is the new batch size, d is the number of input channels, L2 is the new 1D input image size.
+4. upgrade the TransformerBackbone to include positional embeddings (along new input sequence dimension R).
+
+Note I have already switched the L2/C input dimensions of DenseSnapshotModel to bring them into conformity with the standard huggingface library; i.e. S.shape = B1, R, Q, L2, C. 
+
+Here is the complete current version of the code for reference, such that you can provide me with an updated version. 
+
+[ATNLPpt_prediction.py]
+
+---
+ATNLPpt_comparison:ATNLPprediction (backboneType="wavenet") (o3 prompt):
+
+Could you please create a wavenet model called WavenetBackbone based on TransformerBackbone?
+
+
+
+
+

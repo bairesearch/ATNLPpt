@@ -411,7 +411,7 @@ elif(useImageDataset):
 	dropoutProb = 0.5 	#default: 0.5	#orig: 0.3
 elif(useNLPDataset):
 	datasetSizeSubset = True	#default: True (required for stateTestDataset)  #if(useSequentialSANI): hiddenLayerSizeSANI is dynamically grown, and is not dependent on datasetSize (which can therefore be huge), however a) useDatasetSubset is still useful for fast training (development/debugging) and b) is required to reserve data for an eval phase 
-	datasetSizeSubsetName = "tiny"
+	datasetSizeSubsetName = "small"
 	if(datasetSizeSubsetName=="tiny"):
 		datasetTrainRows = 2	#must be > 1
 		datasetTestRows = 2	#must be > 1
@@ -423,15 +423,15 @@ elif(useNLPDataset):
 	elif(datasetSizeSubsetName=="small"):
 		datasetTrainRows = 128
 		datasetTestRows = int(datasetTrainRows*0.5)
-		batchSize = 16	#default: 16
+		batchSize = 2	#default: 16
 	elif(datasetSizeSubsetName=="medium"):
 		datasetTrainRows = 1000		#default: 100000
 		datasetTestRows = int(datasetTrainRows*0.1) #[datasetTestSplitSize]
-		batchSize = 64	#orig 16
+		batchSize = 16	#default: 16
 	elif(datasetSizeSubsetName=="large"):
 		datasetTrainRows = 10000		#default: 100000
 		datasetTestRows = int(datasetTrainRows*0.1) #[datasetTestSplitSize]
-		batchSize = 256
+		batchSize = 16	#default: 16	#orig: 256
 	elif(datasetSizeSubsetName=="default"):
 		datasetTrainRows = 100000
 		datasetTestRows = int(datasetTrainRows*0.1) #[datasetTestSplitSize]
@@ -443,8 +443,7 @@ elif(useNLPDataset):
 	trainNumberOfEpochs = 1	#default: 1	#with increased epochs can significantly increase train accuracy on train dataset (though should theoretically have no effect on test accuracy)
 	if(useAlgorithmATNLP):
 		B1 = batchSize
-		#B2 is encapsulates the number of normalisations (sets of 2 keypoints); either b) B1*r or c) B1*r*(q-1).
-		B2 = B1*S
+		B2 = B1*S	#B2 is encapsulates the number of normalisations (sets of 2 keypoints); either b) B1*R or c) B1*R*Q
 	
 def round_up_to_power_of_2(x: float) -> int:
 	if x <= 0:

@@ -22,9 +22,9 @@ from typing import Literal
 			
 printATNLPmodelProperties = True
 
-debugSequentialLoops = True
+debugSequentialLoops = False
 debugATNLPnormalisation = False
-debugATNLPcomparison = True
+debugATNLPcomparison = False
 debugATNLPkeypoints = False
 debugSkipFirstBatch = False	#skips the first dataset batch (sample) where batchSize=1 for debug, as this contains very few keypoints at start of sequence
 
@@ -37,18 +37,29 @@ debugOnlyPrintStreamedWikiArticleTitles = False
 import torch as pt
 if pt.cuda.is_available():
 	deviceGPU = pt.device("cuda")
+#else:
+#	deviceGPU = pt.device("cpu")
 deviceCPU = pt.device("cpu")
 
 ATNLPusePredictionHead = True	#use ML model (CNN/transformer) as a next token prediction head
 if(ATNLPusePredictionHead):
+	backboneType = "transformer" #"transformer", "wavenet", "cnn" (legacy)
 	reorderPairsToBeNotReversed = True	#default: True - prediction head may expect ordered normalised snapshots as input 
 	optimiserAdamW = True
 	useCustomLearningAlgorithm = False
 	trainLocalIndividialLayers = False	#train once per prediction head model execution
 	d_model = 128	#normalised snapshot token encoding size
+	if(backboneType=="transformer" or backboneType=="wavenet"):
+		useSlidingWindow = False	#does not use sliding window during training
+	'''
+	elif(backboneType=="cnn"):	#legacy
+		useSlidingWindow = True		#mandatory
+	'''
 else:
+	backboneType = "none"
 	useCustomLearningAlgorithm = True	#mandatory (disable all backprop optimisers)
 	reorderPairsToBeNotReversed = False	#default: False (process last normalised snapshot first as this is special; it is only defined by 1 reference set delimiter keypoint)
+	useSlidingWindow = True		#mandatory
 trainLocal = True	#local learning rule	#required
 
 ATNLPindexDatabaseByClassTarget = True	#optional	#overload normalised snapshots with same class target	#orig: False
@@ -97,8 +108,6 @@ elif(ATNLPsnapshotDatabaseRam):
 	saveAndLoadModel = False	#self.database can be large so do not save it to disk
 deviceSparse = ATNLPsnapshotDatabaseLoadDevice
 	
-useSlidingWindow = True	#enables sliding window	#mandatory
-
 bertModelName = "bert-base-uncased"	#bertModelName = "bert-large-uncased"
 bertNumberTokenTypes = 30522	#tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")	print(len(tokenizer))
 
@@ -114,12 +123,13 @@ else:
 contextSizeMax = 128*4	#default: 512	#production: 512*4	#specified in characters	#assume approx 4 characters per BERT token
 contextSizeMaxCharacters = contextSizeMax	
 contextSizeMaxBertTokens = contextSizeMax//2	#safe only (max)	#average: //4	- wikipedia average token length
-contextSizeMaxSpacyTokens = contextSizeMax//2	#safe only (max)	#average: //6	- wikipedia average word length
+contextSizeMaxSpacyTokens = contextSizeMax//4	#safe only (max)	#average: //6	- wikipedia average word length
 
 numberOfClasses = ATNLPcontinuousVarEncodingNumBits
 
 sequenceLength = contextSizeMax
-NLPcharacterInputPadTokenID = 0	#must be same as bert pad token id	#assert bert_tokenizer.pad_token_id == NLPcharacterInputPadTokenID
+NLPpadTokenID = 0		#must be same as bert pad token id	#assert bert_tokenizer.pad_token_id == NLPpadTokenID
+NLPmaskTokenID = 103	#must be same as bert mask token id	#assert bert_tokenizer.mask_token_id == NLPmaskTokenID	#used to identify predicted tokens in normalised snapshot during predictive network training only (eg transformer)
 
 inputDataNames = ["char_input_ids", "bert_input_ids", "bert_offsets", "spacy_input_ids", "spacy_pos", "spacy_tag", "spacy_offsets"]	
 
@@ -128,23 +138,27 @@ C = ATNLPcontinuousVarEncodingNumBits	#vocabulary size
 
 #sequence length vars;
 L1 = sequenceLength
-L2 = 10	#default: 10	#normalisation length for each reference set
+L2 = 8	#default: 8	#normalisation length for each reference set	#required for backboneType="cnn" only, ensure continuously divisible by 2
 
 #keypoint extraction vars;
 keypointModes = Literal["allKeypointCombinations", "firstKeypointConsecutivePairs", "firstKeypointPairs"]
-R = 3	#the last R (user defined) set of 2 consecutive keypoints in batch sequence
-Q = 1   #the last R (user defined) set of 2 keypoints (of distance 2->Q) in batch sequence               
-
+if(useSlidingWindow):
+	R = 3	#the last R (user defined) set of 2 consecutive keypoints in batch sequence
+	Q = 1   #the last R (user defined) set of 2 keypoints (of distance Q) in batch sequence
+else:
+	R = 10	#the last R (user defined) set of 2 consecutive keypoints in batch sequence	#max number of reference sets in batch sequence (if less reference sets detected in sequence some normalised snapshots will be filled with zeros)
+	Q = 1	#the last R (user defined) set of 2 keypoints (of distance Q) in batch sequence
+	
 #referenceSetPosDelimitersPosStr = {"PUNCT", "VERB", "ADP"}
 #referenceSetPosDelimitersPosStr = {"PUNCT", "VERB"}
 ##referenceSetPosDelimitersTagStr = {".", "VB", "VBD", "VBG", "VBN", "VBP", "VBZ", "IN", "TO", "CC", ",", ";"}       # identical to TF version
 referenceSetPosDelimitersTagStr = {".", "VB", "VBD", "VBG", "VBN", "VBP", "VBZ"}	#verbs only	#TODO: collapse auxiliary verbs (eg tagged as VBZ/VBD) with adjacent VBN into single ref set delimiter; eg has [VBZ] run [VBN], had [VBD] gone [VBN] -> has_run [VBZ], had_gone [VBD]
-keypointMode="firstKeypointConsecutivePairs"	 #out shape = (B1*R, C, L2)
-#keypointMode="firstKeypointPairs"	 	#out shape = (B1*R*(Q-1), C, L2)	#default (requires testing)
-if(keypointMode == "firstKeypointPairs"):
+#keypointMode="firstKeypointConsecutivePairs"	 #out shape = (B1*R, C, L2)
+keypointMode="firstKeypointPairs"	 	#out shape = (B1*R*Q, C, L2)	#default (requires testing)
+if(keypointMode == "firstKeypointConsecutivePairs"):
 	S = R
-elif(keypointMode == "firstKeypointConsecutivePairs"):
-	S = R*(Q-1)
+elif(keypointMode == "firstKeypointPairs"):
+	S = R*Q
 		
 useNLPDatasetMultipleTokenisation = True	#mandatory: True	#required for spacy tokenisation
 if(useNLPDatasetMultipleTokenisation):
@@ -159,9 +173,9 @@ if(useNLPDatasetMultipleTokenisation):
 		useNLPcharacterInputBasic = True	#if True: only use a basic lowercase+punctuation character set of 30 chars, else if False: use a full printable subset of ASCII-128
 		if(useNLPcharacterInputBasic):
 			NLPcharacterInputBasicSet = [' ', 'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','Q','R','s','t','u','v','w','x','y','z','.','(',')', ',']	#select 31 characters for normalcy
-			NLPcharacterInputSetLen = len(NLPcharacterInputBasicSet)+1	#32	# 0 reserved for PAD (NLPcharacterInputPadTokenID)
+			NLPcharacterInputSetLen = len(NLPcharacterInputBasicSet)+1	#32	# 0 reserved for PAD (NLPpadTokenID)
 		else:
-			NLPcharacterInputSetLen = 98	  # full printable subset of ASCII-128	# 0 reserved for PAD (NLPcharacterInputPadTokenID)
+			NLPcharacterInputSetLen = 98	  # full printable subset of ASCII-128	# 0 reserved for PAD (NLPpadTokenID)
 
 #sublayer paramters:	
 simulatedDendriticBranches = False	#optional	#performTopK selection of neurons based on local inhibition - equivalent to multiple independent fully connected weights per neuron (SDBANN)

@@ -63,7 +63,7 @@ class ATNLPmodel(nn.Module):
 		self.config = config
 
 		if(ATNLPusePredictionHead):
-			self.predictionModel = ATNLPpt_prediction.DenseSnapshotModel(C, d_model, backbone="cnn").to(device)
+			self.predictionModel = ATNLPpt_prediction.DenseSnapshotModel(C, d_model, backbone=backboneType).to(device)
 		else:
 			# -----------------------------
 			# database declaration
@@ -123,7 +123,7 @@ class ATNLPmodel(nn.Module):
 
 		if(useSlidingWindow):
 			if(useNLPDatasetPaddingMask):	
-				non_pad	= (seq_input != NLPcharacterInputPadTokenID)		# [B1, L1]
+				non_pad	= (seq_input != NLPpadTokenID)		# [B1, L1]
 				if not pt.any(non_pad):
 					return
 				lengths	= non_pad.sum(-1)							# [B1]
@@ -159,7 +159,10 @@ class ATNLPmodel(nn.Module):
 			# -----------------------------
 			# Transformation (normalisation)
 			# -----------------------------
-			last_token_idx = slidingWindowIndex
+			if(useSlidingWindow):
+				last_token_idx = slidingWindowIndex
+			else:
+				last_token_idx = contextSizeMax
 			normalisedSnapshots, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid = ATNLPpt_normalisation.normalise_batch(seq_input_encoded, x['spacy_pos'], x['spacy_offsets'], last_token_idx, mode=keypointMode, R=R, Q=Q, L2=L2, kp_indices_batch=kp_indices_batch, kp_meta_batch=kp_meta_batch)
 			if(debugATNLPnormalisation):
 				print("seq_input_encoded = ", seq_input_encoded)	
@@ -171,30 +174,37 @@ class ATNLPmodel(nn.Module):
 			else:
 				continue
 		
-			y, classTargets = self.generateClassTargets(slidingWindowIndex, normalisedSnapshots, B1, seq_input)
-
 			# -----------------------------
 			# Train/Prediction
 			# -----------------------------	
 			if(ATNLPusePredictionHead):
 				#print("normalisedSnapshots.shape = ", normalisedSnapshots.shape)
 				normalisedSnapshots = normalisedSnapshots.reshape(B1, R, Q, C, L2)	#reshape to (B1, R, Q, C, L2)
+				normalisedSnapshots = normalisedSnapshots.permute(0, 2, 1, 4, 3)	#(B1, Q, R, L2, C)
+				normalisedSequence = self.predictionModel.generateNormalisedSequence(normalisedSnapshots)	#transformer/wavenet: (B1*Q, R*L2, C)
+				if(useSlidingWindow):
+					y, _ = self.generateClassTargetsSlidingWindow(slidingWindowIndex, normalisedSnapshots)	#legacy
+				else:
+					y = self.generateClassTargetsAll(normalisedSequence)
+				
 				if(trainOrTest):
 					with torch.enable_grad():
 						self.predictionModel.train()
-						logits, _ = self.predictionModel(normalisedSnapshots)
+						logits = self.predictionModel(normalisedSnapshots)
 						loss = ATNLPpt_prediction.loss_function(logits, y)
 						optim.zero_grad()
 						loss.backward()
 						optim.step()
 				else:
 					self.predictionModel.eval()
-					logits, _ = self.predictionModel(normalisedSnapshots)
+					logits = self.predictionModel(normalisedSnapshots)
 					loss = ATNLPpt_prediction.loss_function(logits, y)
 				matches = ATNLPpt_prediction.calculate_matches(logits, y)
 				loss = loss.item()
 				comparisonFound = True
 			else:
+				y, classTargets = self.generateClassTargetsSlidingWindow(slidingWindowIndex, normalisedSnapshots, seq_input)
+
 				normalisedSnapshots = normalisedSnapshots.to_sparse_coo()
 				normalisedSnapshots = normalisedSnapshots.coalesce()
 				#if(ATNLPsnapshotDatabaseLoadDevice):
@@ -248,7 +258,7 @@ class ATNLPmodel(nn.Module):
 		# count how many are exactly correct
 		if(useNLPDatasetPaddingMask):
 			#print("y = ", y)
-			valid_mask = (y != NLPcharacterInputPadTokenID)
+			valid_mask = (y != NLPpadTokenID)
 			valid_count = valid_mask.sum().item()
 			if valid_count > 0:
 				correct = (matches & valid_mask).sum().item()
@@ -282,7 +292,7 @@ class ATNLPmodel(nn.Module):
 						if(self.database[referenceSetDelimiterID][s] is not None):
 							ATNLPpt_database.saveSnapshotDatabaseIndex(self, referenceSetDelimiterID, s)
 						#print("snapshotDatabaseWriter close")
-									
+												
 	def deriveCurrentBatchSize(self, batch):
 		(x, y) = batch
 		if useNLPDatasetMultipleTokenisation:
@@ -316,12 +326,12 @@ class ATNLPmodel(nn.Module):
 		#print("ATNLPpt_keypoints.verbPosId = ", ATNLPpt_keypoints.verbPosId)
 		if(spacy_pos == ATNLPpt_keypoints.punctPosId):
 			referenceSetsFirstDelimiterString = lexIntToLexString(ATNLPpt_keypoints.nlp, spacy_input_id)
-			print("punctPosId: referenceSetsFirstDelimiterString = ", referenceSetsFirstDelimiterString)
+			#print("punctPosId: referenceSetsFirstDelimiterString = ", referenceSetsFirstDelimiterString)
 			if(referenceSetsFirstDelimiterString == "."):
 				referenceSetDelimiterID += 1	#"."
 		elif(spacy_pos == ATNLPpt_keypoints.verbPosId):
 			referenceSetsFirstDelimiterString = lexIntToLexString(ATNLPpt_keypoints.nlp, spacy_input_id)
-			print("verbPosId: referenceSetsFirstDelimiterString = ", referenceSetsFirstDelimiterString)
+			#print("verbPosId: referenceSetsFirstDelimiterString = ", referenceSetsFirstDelimiterString)
 			referenceSetDelimiterID += 1
 			if referenceSetsFirstDelimiterString in ATNLPpt_keypoints.verb_dict:
 				verbIndex = ATNLPpt_keypoints.verb_dict[referenceSetsFirstDelimiterString]
@@ -377,16 +387,28 @@ class ATNLPmodel(nn.Module):
 						elif(ATNLPsnapshotDatabaseRam):
 							self.normalisedSnapshot_list[referenceSetDelimiterID][s].append(normalisedSnapshot)
 							self.classTarget_list[referenceSetDelimiterID][s].append(classTarget)
-		
-	def generateClassTargets(self, slidingWindowIndex, normalisedSnapshots, B1, seq_input):
-		#for now just predict final character in sequence window
-		#FUTURE: predict Bert tokens rather than individual characters)
-		
-		B1 = normalisedSnapshots.shape[0]
-		S = normalisedSnapshots.shape[1]
-		y = seq_input[:, slidingWindowIndex] #shape = B1	
-		B2 = B1*S
-		classTargets = y.unsqueeze(1).repeat(1, S)	#shape = (B1, S)
+
+	def generateClassTargetsAll(self, normalisedSequence):
+		#normalisedSequence: (B1*Q, R*L2, C)
+		#FUTURE: create decoder to predict individual bert/character tokens rather than normalised snapshot interpolated bert tokens
+		B1Q, RL2, C = normalisedSequence.shape
+		yLeft = normalisedSequence[:, 1:, :] #(B1*Q, R*L2, C)
+		yPad = torch.zeros((B1Q, 1, C), device=normalisedSequence.device)	#final token in sequence does not have a valid prediction value
+		y = torch.cat((yLeft, yPad), dim=1) 
+		return y
+	
+	def generateClassTargetsSlidingWindow(self, slidingWindowIndex, normalisedSnapshots, seq_input):
+		#normalisedSnapshots: (B1, R, Q, C, L2) or (B1, Q, R, L2, C)
+		#FUTURE: predict Bert tokens rather than individual characters
+		if(useSlidingWindow):
+			#for now just predict final character in sequence window
+			B1 = normalisedSnapshots.shape[0]
+			S = normalisedSnapshots.shape[1]*normalisedSnapshots.shape[2]
+			y = seq_input[:, slidingWindowIndex] #shape = B1
+			B2 = B1*S
+			classTargets = y.unsqueeze(1).repeat(1, S)	#shape = (B1, S)
+		else:
+			printe("generateClassTargets requires useSlidingWindow")
 		return y, classTargets
 				
 	def finaliseTrainedSnapshotDatabase(self):
@@ -416,7 +438,7 @@ class ATNLPmodel(nn.Module):
 			bert_input_ids = x['bert_input_ids'].to(device)	# (B, Lb)	 int64
 			bert_offsets = x['bert_offsets'].to(device)	#(B, Lb, 2)  int64
 			Lc = contextSizeMax
-			pad_id = NLPcharacterInputPadTokenID
+			pad_id = NLPpadTokenID
 			
 			# ------------------------------------------------------------------
 			B, Lb = bert_input_ids.shape
@@ -439,9 +461,7 @@ class ATNLPmodel(nn.Module):
 			ids_per_char = bert_input_ids.gather(1, token_idx)			  # (B,Lc)
 			ids_per_char[no_cover] = pad_id
 			seq_input = ids_per_char
-			
-			print("seq_input.device = ", seq_input.device)
-	
+				
 		return seq_input
 
 

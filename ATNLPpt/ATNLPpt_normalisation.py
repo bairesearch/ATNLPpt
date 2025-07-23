@@ -76,7 +76,7 @@ def normalise_batch(
 
 	# ---------- build key-point tensors for whole batch (loops allowed) ---- #
 	all_keypointPairsCharIdx, all_keypointPairsValid, all_keypointPairsIndices, sample_idx = [], [], [], []
-
+	
 	for b in range(B1):
 		
 		# Each samples has a designated 'last spacy token' index (corresponding to the spacy token encapsulating the prediction target bert token or character)
@@ -97,10 +97,11 @@ def normalise_batch(
 		ATNLPpt_keypoints.insert_keypoints_last_token(last_spacy_token_idx[b], kp_use_spacy)
 		keypointPairsIndices, keypointPairsValid = ATNLPpt_keypoints.make_pairs(kp_use_spacy, mode, R, Q)
 		#currently use keypointPairsValid from keypointPairsIndices (prevents intraReferenceSetDelimiter eg intraverb token prediction)
-
+			
 		if(debugATNLPkeypoints):
 			print("kp_use_spacy = ", kp_use_spacy)
 			print("kp_use = ", kp_use)
+			print("keypointPairsIndices = ", keypointPairsIndices)
 			print("keypointPairsCharIdx = ", keypointPairsCharIdx)
 			print("keypointPairsValid = ", keypointPairsValid)
 		
@@ -149,7 +150,7 @@ def normalise_batch(
 	keypointPairsIndices = keypointPairsIndices.reshape(B1, S, 2)	#(B1, S, 2)
 	keypointPairsCharIdx = keypointPairsCharIdx.reshape(B1, S, 2)	#(B1, S, 2)
 	keypointPairsValid = keypointPairsValid.reshape(B1, S)	#(B1,S)
-	
+		
 	return normalisedSnapshots, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid
 
 

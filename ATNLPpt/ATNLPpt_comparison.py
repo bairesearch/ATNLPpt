@@ -465,7 +465,8 @@ else:
 						sim_val, sim_id = torch.max(sim, dim=1)	# (1)
 						sim_class = db_classes[sim_id[0]].unsqueeze(0)
 						comparisonFound = True
-						print("comparisonFound")
+						if(debugATNLPcomparison):
+							print("comparisonFound")
 					else:
 						sim_val = torch.tensor([-1], device=device)	#CHECKTHIS
 						sim_id = torch.tensor([0], device=device)	#CHECKTHIS
@@ -582,7 +583,8 @@ else:
 						sim_val, sim_id = torch.max(sim, dim=1)	# (1)
 						sim_class = db_classes[sim_id[0]].unsqueeze(0)
 						comparisonFound = True
-						print("comparisonFound")
+						if(debugATNLPcomparison):
+							print("comparisonFound")
 					else:
 						sim_val = torch.tensor([-1], device=device)	#CHECKTHIS
 						sim_id = torch.tensor([0], device=device)	#CHECKTHIS
