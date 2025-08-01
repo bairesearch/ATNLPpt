@@ -431,7 +431,7 @@ elif(useNLPDataset):
 	elif(datasetSizeSubsetName=="large"):
 		datasetTrainRows = 10000		#default: 100000
 		datasetTestRows = int(datasetTrainRows*0.1) #[datasetTestSplitSize]
-		batchSize = 16	#default: 16	#orig: 256
+		batchSize = 4	#default: 16	#orig: 256
 	elif(datasetSizeSubsetName=="default"):
 		datasetTrainRows = 100000
 		datasetTestRows = int(datasetTrainRows*0.1) #[datasetTestSplitSize]

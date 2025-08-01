@@ -46,15 +46,19 @@ def createModel(dataset):
 		print("\t inputLayerSize (numberOfFeatures) = ", numberOfFeatures)
 		print("\t outputLayerSize (numberOfClasses) = ", numberOfClasses)
 		print("\t ---")
-		print("\t ATNLPusePredictionHead = ", ATNLPusePredictionHead)
-		print("\t backboneType = ", backboneType)
+		print("\t R = ", R)
+		print("\t Q = ", Q)
 		print("\t ---")
-		print("\t ATNLPnormalisedSnapshotsSparseTensors = ", ATNLPnormalisedSnapshotsSparseTensors)
-		print("\t ATNLPcomparisonShiftInvariance = ", ATNLPcomparisonShiftInvariance)
-		print("\t ATNLPcomparisonShiftInvariancePixels = ", ATNLPcomparisonShiftInvariancePixels)
-		print("\t ATNLPsnapshotDatabaseDisk = ", ATNLPsnapshotDatabaseDisk)
-		print("\t ATNLPsnapshotDatabaseRam = ", ATNLPsnapshotDatabaseRam)
-		print("\t ATNLPsnapshotDatabaseRamDynamic = ", ATNLPsnapshotDatabaseRamDynamic)
+		if(ATNLPusePredictionHead):
+			print("\t ATNLPusePredictionHead = ", ATNLPusePredictionHead)
+			print("\t backboneType = ", backboneType)
+		else:
+			print("\t ATNLPnormalisedSnapshotsSparseTensors = ", ATNLPnormalisedSnapshotsSparseTensors)
+			print("\t ATNLPcomparisonShiftInvariance = ", ATNLPcomparisonShiftInvariance)
+			print("\t ATNLPcomparisonShiftInvariancePixels = ", ATNLPcomparisonShiftInvariancePixels)
+			print("\t ATNLPsnapshotDatabaseDisk = ", ATNLPsnapshotDatabaseDisk)
+			print("\t ATNLPsnapshotDatabaseRam = ", ATNLPsnapshotDatabaseRam)
+			print("\t ATNLPsnapshotDatabaseRamDynamic = ", ATNLPsnapshotDatabaseRamDynamic)
 		print("\t ---")
 
 	config = ATNLPpt_ATNLPmodel.ATNLPconfig(

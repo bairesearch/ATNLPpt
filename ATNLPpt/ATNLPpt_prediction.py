@@ -32,7 +32,7 @@ no longer need per-snapshot length tensors or padding masks.
 
 Input tensor shape (unchanged)
 ------------------------------
-	S : (B1, Q, R, L2, C)
+	x : (B1, Q, R, L2, C)
 
 where
 * **B1** - normalised batch size,
@@ -45,6 +45,7 @@ The model outputs one next-token prediction per element of the **B1** axis.
 
 Revision history
 ----------------
+* **v0.8**(2025-08-01) -- add option ATNLPuseSequenceLevelPrediction: use input shape (B1*Q, R, L2*d)
 * **v0.7**(2025-07-23) -- *Layout change:* input is now `(B1,Q,R,L2,C), change TransformerBackbone to use input of shape (B1*Q, R*L2, d), add WaveNetBackbone
 * **v0.6**(2025-07-22) -- *Layout change:* input is now `(B1,R,Q,L2,C)
 * **v0.5**(2025-07-18) -- assume no padding; removed `lens`-based masking and simplified the forward pass accordingly.
@@ -59,19 +60,19 @@ Revision history
 # ---------------------------------------------------------------------------
 
 class DenseSnapshotEncoder(nn.Module):
-	"""Linear projection pTE from R^C - R^d_model."""
+	"""Linear projection pTE from R^d_input - R^d_model."""
 
-	def __init__(self, C: int, d_model: int):
+	def __init__(self, d_input: int, d_model: int):
 		super().__init__()
-		self.E = nn.Linear(C, d_model, bias=False)
+		self.E = nn.Linear(d_input, d_model, bias=False)
 
 	def forward(self, S: torch.Tensor) -> torch.Tensor:
-		"""(B1,R,Q,L2,C) ->  (B1,R,Q,L2,d)."""
-		B1, R, Q, L2, C = S.shape
-		S = S.reshape(-1, C)	  # (B2RQL2, C)
+		"""(B1R,QL2,C) ->  (B1Q,RL2,d)."""
+		B1Q, RL2, C = S.shape
+		S = S.reshape(-1, C)	  # (B1QRL2, C)
 		out = self.E(S)
 		d_model = out.shape[-1]
-		return out.view(B1, R, Q, L2, d_model)
+		return out.view(B1Q, RL2, d_model)
 
 class DenseSnapshotDecoder(nn.Module):
 	"""Linear projection pTD from R^d_model - R^C."""
@@ -87,33 +88,6 @@ class DenseSnapshotDecoder(nn.Module):
 		out = self.D(S)
 		C = out.shape[-1]
 		return out.view(B1Q, RL2, C)
-
-'''
-#legacy;	
-class DenseSnapshotHead(nn.Module):
-	"""Simple MLP head that maps a flattened (d*L2) vector to C logits."""
-
-	def __init__(self, C: int, d_model: int, L2: int, head_hidden: Sequence[int] = (d_model*L2, d_model*L2)):
-		super().__init__()
-		self.C = C
-		self.d_model = d_model
-		self.L2 = L2
-		self.head_hidden = head_hidden
-
-		flat_dim = L2 * d_model
-		layers: list[nn.Module] = []
-		in_dim = flat_dim
-		for h in head_hidden:
-			layers += [nn.Linear(in_dim, h), nn.ReLU()]
-			in_dim = h
-		layers.append(nn.Linear(in_dim, C))
-		self.head = nn.Sequential(*layers)
-
-	def forward(self, x: torch.Tensor) -> torch.Tensor:
-		# x : (B, D*L2)	already flattened
-		out = self.head(x)	# x : (B, C)
-		return out
-'''
 
 # ---------------------------------------------------------------------------
 # 2.  Causal Backbones
@@ -224,52 +198,6 @@ class _WaveNetResBlock(nn.Module):
 		res = self.res_proj(z) + x			# residual connection
 		return res, skip
 
-'''
-#legacy
-class CausalCNNBackbone(nn.Module):
-	"""Depth-wise causal 1-D CNN that preserves causality. Expects (B, d, L)."""
-
-	def __init__(
-		self,
-		d_model: int,
-		kernel_size: int = 3,
-		channel_multipliers: Sequence[int] = (2, 2, 2),	# how channel count grows per layer
-		strides: Sequence[int] = (1, 2, 2),				# how L shrinks per layer (>=1)
-	):
-		super().__init__()
-		assert len(channel_multipliers) == len(strides), "channel_multipliers and strides must match length"
-
-		self.kernel_size = kernel_size
-		self.d_model_in = d_model
-
-		# ---------- CNN stack ----------
-		cnn_layers = []
-		in_c = d_model
-		for mult, stride in zip(channel_multipliers, strides):
-			out_c = in_c * mult
-			pad_left = kernel_size - 1						# causal: pad left only	#CHECKTHIS
-			cnn_layers.append(nn.Conv1d(in_c, in_c, kernel_size, padding=pad_left, groups=in_c, stride=stride))
-			cnn_layers.append(nn.Conv1d(in_c, out_c, kernel_size=1))
-			cnn_layers.append(nn.ReLU())
-			in_c = out_c
-		self.cnn = nn.Sequential(*cnn_layers)
-		self.cnn_out_channels = in_c					# last out_c
-
-	def forward(self, x: torch.Tensor) -> torch.Tensor:
-		# x: (B, d_model_in, L)
-		B, d, L = x.shape
-		assert d == self.d_model_in, \"Input channel mismatch\"
-		enc = self.cnn(x)
-
-		B, D_out, L_out = enc.shape	# (B, d*L2, 1)
-		assert D_out==d*L
-		assert L_out==1
-
-		enc = enc.squeeze(dim=-1) #(B, d*L2)
-
-		return enc  
-'''
-
 # ---------------------------------------------------------------------------
 # 3.  Top-level model
 # ---------------------------------------------------------------------------
@@ -277,60 +205,48 @@ class CausalCNNBackbone(nn.Module):
 class DenseSnapshotModel(nn.Module):
 	def __init__(
 		self,
-		C: int,
+		d_input: int,
 		d_model: int = 512,
-		backbone: str = "cnn",
+		backbone: str = "transformer",
 		backbone_kwargs: Optional[Dict] = None,
 		pretrained_embed: Optional[torch.Tensor] = None,
 	):
 		super().__init__()
 		self.d_model = d_model
-		self.encoder = DenseSnapshotEncoder(C, d_model)
+		self.encoder = DenseSnapshotEncoder(d_input, d_model)
 		self.backbone_type = backbone
 		if backbone_kwargs is None:
 			backbone_kwargs = {}
 		if backbone == "transformer":
 			self.backbone = TransformerBackbone(d_model, **backbone_kwargs)
-			self.decoder = DenseSnapshotDecoder(C, d_model)
+			self.decoder = DenseSnapshotDecoder(d_input, d_model)
 		elif backbone == "wavenet":
 			self.backbone = WaveNetBackbone(d_model, **backbone_kwargs)
-			self.decoder = DenseSnapshotDecoder(C, d_model)
+			self.decoder = DenseSnapshotDecoder(d_input, d_model)
 		else:
 			printe("Unknown backbone {backbone}")
-		'''
-		elif backbone == "cnn":	#legacy
-			self.backbone = CausalCNNBackbone(d_model, **backbone_kwargs)
-			self.decoder = DenseSnapshotHead(C, d_model)
-		'''
-		self.proj = nn.Linear(d_model, C, bias=False)
+		self.proj = nn.Linear(d_model, d_input, bias=False)
 
 	
 	def generateNormalisedSequence(self, x):
-		B1, Q, R, L2, d = x.shape
+		B1, Q, R, L2, C = x.shape
 		if self.backbone_type == "transformer" or self.backbone_type == "wavenet":
 			#no sliding window (generate predictions for each token)
-			x = x.reshape(B1*Q, R*L2, d)                        # (B1*Q, R*L2, d)
-		'''
-		elif self.backbone_type == "cnn":	#legacy
-			#sliding window
-			x = x.permute(0,1,2,4,3)    # (B1,Q,R,d,L2)
-			x = x.reshape(B1*Q*R, d, L2)            # (B1*Q*R, d, L2)
-		'''
+			if(ATNLPuseSequenceLevelPrediction):
+				x = x.reshape(B1*Q, R, L2*C)                        # (B1*Q, R, L2*C)
+			else:
+				x = x.reshape(B1*Q, R*L2, C)                        # (B1*Q, R*L2, C)
 		return x
 		
-	def forward(self, S: torch.Tensor, trainOrTest: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
+	def forward(self, x: torch.Tensor, trainOrTest: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
 		"""Return `(logits, fused_rep)`.
 
-		* **S** - (B1,R,Q,L2,C)
-		* if self.backbone_type == "transformer":
+		* **x** - (B1,Q,R,L2,C)
 		*	**logits** - (B1*Q, R*L2-1, C) one prediction for each token
-		* elif self.backbone_type == "cnn":
-		* 	**logits** - (B1,C)  one prediction per B1 sample.
 		"""
-		B1, Q, R, L2, C = S.shape
-		x = self.encoder(S)				# (B1,Q,R,L2,d)
-		x = self.generateNormalisedSequence(x)	#transformer/wavenet: (B1*Q, R*L2, d)
-		#print("x.shape = ", x.shape)
+		B1, Q, R, L2, C = x.shape
+		x = self.generateNormalisedSequence(x)	#transformer/wavenet: (B1*Q, R*L2, C)
+		x = self.encoder(x)				# (B1*Q,R*L2,d)
 		enc = self.backbone(x)	#transformer/wavenet: (B1*Q, R*L2, d)
 		logits = self.decoder(x)	#transformer/wavenet: (B1*Q, R*L2, C)
 

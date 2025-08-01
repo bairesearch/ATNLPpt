@@ -41,9 +41,10 @@ if pt.cuda.is_available():
 #	deviceGPU = pt.device("cpu")
 deviceCPU = pt.device("cpu")
 
-ATNLPusePredictionHead = True	#use ML model (CNN/transformer) as a next token prediction head
+ATNLPusePredictionHead = True	#use ML model (transformer/wavenet) as a next token prediction head
 if(ATNLPusePredictionHead):
-	backboneType = "transformer" #"transformer", "wavenet", "cnn" (legacy)
+	ATNLPuseSequenceLevelPrediction = False	#optional	#predicts reference sets rather than (normalised) bert tokens
+	backboneType = "transformer" #"transformer", "wavenet"
 	reorderPairsToBeNotReversed = True	#default: True - prediction head may expect ordered normalised snapshots as input 
 	optimiserAdamW = True
 	useCustomLearningAlgorithm = False
@@ -51,11 +52,8 @@ if(ATNLPusePredictionHead):
 	d_model = 128	#normalised snapshot token encoding size
 	if(backboneType=="transformer" or backboneType=="wavenet"):
 		useSlidingWindow = False	#does not use sliding window during training
-	'''
-	elif(backboneType=="cnn"):	#legacy
-		useSlidingWindow = True		#mandatory
-	'''
 else:
+	ATNLPuseSequenceLevelPrediction = False	#mandatory: False
 	backboneType = "none"
 	useCustomLearningAlgorithm = True	#mandatory (disable all backprop optimisers)
 	reorderPairsToBeNotReversed = False	#default: False (process last normalised snapshot first as this is special; it is only defined by 1 reference set delimiter keypoint)
@@ -138,7 +136,7 @@ C = ATNLPcontinuousVarEncodingNumBits	#vocabulary size
 
 #sequence length vars;
 L1 = sequenceLength
-L2 = 8	#default: 8	#normalisation length for each reference set	#required for backboneType="cnn" only, ensure continuously divisible by 2
+L2 = 8	#default: 8	#normalisation length for each reference set
 
 #keypoint extraction vars;
 keypointModes = Literal["allKeypointCombinations", "firstKeypointConsecutivePairs", "firstKeypointPairs"]
@@ -146,7 +144,7 @@ if(useSlidingWindow):
 	R = 3	#the last R (user defined) set of 2 consecutive keypoints in batch sequence
 	Q = 1   #the last R (user defined) set of 2 keypoints (of distance Q) in batch sequence
 else:
-	R = 10	#the last R (user defined) set of 2 consecutive keypoints in batch sequence	#max number of reference sets in batch sequence (if less reference sets detected in sequence some normalised snapshots will be filled with zeros)
+	R = 5	#default: 10	#the last R (user defined) set of 2 consecutive keypoints in batch sequence	#max number of reference sets in batch sequence (if less reference sets detected in sequence some normalised snapshots will be filled with zeros)
 	Q = 1	#the last R (user defined) set of 2 keypoints (of distance Q) in batch sequence
 	
 #referenceSetPosDelimitersPosStr = {"PUNCT", "VERB", "ADP"}

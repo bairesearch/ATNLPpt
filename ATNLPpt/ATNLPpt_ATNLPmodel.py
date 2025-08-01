@@ -63,7 +63,11 @@ class ATNLPmodel(nn.Module):
 		self.config = config
 
 		if(ATNLPusePredictionHead):
-			self.predictionModel = ATNLPpt_prediction.DenseSnapshotModel(C, d_model, backbone=backboneType).to(device)
+			if(ATNLPuseSequenceLevelPrediction):
+				d_input = L2*C
+			else:
+				d_input = C
+			self.predictionModel = ATNLPpt_prediction.DenseSnapshotModel(d_input, d_model, backbone=backboneType).to(device)
 		else:
 			# -----------------------------
 			# database declaration
@@ -391,7 +395,7 @@ class ATNLPmodel(nn.Module):
 	def generateClassTargetsAll(self, normalisedSequence):
 		#normalisedSequence: (B1*Q, R*L2, C)
 		#FUTURE: create decoder to predict individual bert/character tokens rather than normalised snapshot interpolated bert tokens
-		B1Q, RL2, C = normalisedSequence.shape
+		B1Q, RL2, C = normalisedSequence.shape	#or ATNLPuseSequenceLevelPrediction: B1Q, R, L2C
 		yLeft = normalisedSequence[:, 1:, :] #(B1*Q, R*L2, C)
 		yPad = torch.zeros((B1Q, 1, C), device=normalisedSequence.device)	#final token in sequence does not have a valid prediction value
 		y = torch.cat((yLeft, yPad), dim=1) 
