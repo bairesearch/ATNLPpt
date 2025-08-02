@@ -41,18 +41,32 @@ if pt.cuda.is_available():
 #	deviceGPU = pt.device("cpu")
 deviceCPU = pt.device("cpu")
 
+referenceSetPosDelimiterTypes = ["VB", "VBD", "VBG", "VBN", "VBP", "VBZ"]	#prep: "IN", "TO"	#conj: "CC", ",", ";"
+sentenceCharDelimiterTypes = [".", "?", "!"]
+paragraphCharDelimiterTypes = ["\n"]
+
 ATNLPusePredictionHead = True	#use ML model (transformer/wavenet) as a next token prediction head
 if(ATNLPusePredictionHead):
-	ATNLPuseSequenceLevelPrediction = False	#optional	#predicts reference sets rather than (normalised) bert tokens
+	ATNLPuseMultiLevelTokenPrediction = False	#optional	#predicts char/subword (bert), subsentence (reference set), sentence, paragraph tokens
+	if(ATNLPuseMultiLevelTokenPrediction):
+		ATNLPmultiLevels = 3
+		ATNLPmultiLevelTokensDelimiterNames = ['pos', 'eos', 'eop']
+		ATNLPmultiLevelTokensDelimiterTypes = ['pos', 'char', 'char']
+		ATNLPmultiLevelTokens = ['referenceSets', 'sentences', 'paragraphs']	#if !ATNLPuseSequenceLevelPrediction, prediction targets = ['subwords', 'referenceSets', 'sentences']; or if ATNLPuseSequenceLevelPrediction: prediction targets = ['referenceSets', 'sentences', 'paragraphs']
+		ATNLPmultiLevelTokensDelimiters = [referenceSetPosDelimiterTypes, sentenceCharDelimiterTypes, paragraphCharDelimiterTypes]
+	else:
+		ATNLPmultiLevels = 1
+	ATNLPuseSequenceLevelPrediction = False	#optional	#predicts sequences (eg reference sets) rather than normalised tokens	#if !ATNLPuseSequenceLevelPrediction, prediction target = 'subwords'; or if ATNLPuseSequenceLevelPrediction: prediction target = 'referenceSets'
 	backboneType = "transformer" #"transformer", "wavenet"
 	reorderPairsToBeNotReversed = True	#default: True - prediction head may expect ordered normalised snapshots as input 
 	optimiserAdamW = True
 	useCustomLearningAlgorithm = False
 	trainLocalIndividialLayers = False	#train once per prediction head model execution
 	d_model = 128	#normalised snapshot token encoding size
-	if(backboneType=="transformer" or backboneType=="wavenet"):
-		useSlidingWindow = False	#does not use sliding window during training
+	useSlidingWindow = False	#does not use sliding window during training
 else:
+	ATNLPuseMultiLevelTokenPrediction = False	#mandatory: False
+	ATNLPmultiLevels = 1
 	ATNLPuseSequenceLevelPrediction = False	#mandatory: False
 	backboneType = "none"
 	useCustomLearningAlgorithm = True	#mandatory (disable all backprop optimisers)
@@ -136,27 +150,47 @@ C = ATNLPcontinuousVarEncodingNumBits	#vocabulary size
 
 #sequence length vars;
 L1 = sequenceLength
-L2 = 8	#default: 8	#normalisation length for each reference set
 
 #keypoint extraction vars;
 keypointModes = Literal["allKeypointCombinations", "firstKeypointConsecutivePairs", "firstKeypointPairs"]
-if(useSlidingWindow):
+if(ATNLPusePredictionHead):
+	R, Q, L2 = ([None]*ATNLPmultiLevels, [None]*ATNLPmultiLevels, [None]*ATNLPmultiLevels)
+	for l in range(ATNLPmultiLevels):
+		R[l] = 5*(ATNLPmultiLevels-l)	#default: 10	#the last R (user defined) set of 2 consecutive keypoints in batch sequence	#max number of reference sets in batch sequence (if less reference sets detected in sequence some normalised snapshots will be filled with zeros)
+		Q[l] = 1	#the last R (user defined) set of 2 keypoints (of distance Q) in batch sequence
+		L2[l] = 8	#default: 8	#normalisation length for each reference set
+else:
 	R = 3	#the last R (user defined) set of 2 consecutive keypoints in batch sequence
 	Q = 1   #the last R (user defined) set of 2 keypoints (of distance Q) in batch sequence
+	L2 = 8	#default: 8	#normalisation length for each reference set
+
+referenceSetPosDelimitersStr = []
+if(ATNLPuseMultiLevelTokenPrediction):
+	for name in ATNLPmultiLevelTokensDelimiterNames:
+		if(name == 'pos'):	#l=1
+			referenceSetPosDelimitersStr.append(referenceSetPosDelimiterTypes)
+			#TODO: collapse auxiliary verbs (eg tagged as VBZ/VBD) with adjacent VBN into single ref set delimiter; eg has [VBZ] run [VBN], had [VBD] gone [VBN] -> has_run [VBZ], had_gone [VBD]
+		elif(name == 'eos'):	#l=2
+			referenceSetPosDelimitersStr.append(sentenceCharDelimiterTypes)
+		elif(name == 'eop'):	#l=3
+			referenceSetPosDelimitersStr.append(paragraphCharDelimiterTypes)	#new line/paragaph added for ATNLPuseMultiLevelTokenPrediction compatibility (paragraph sequences)
 else:
-	R = 5	#default: 10	#the last R (user defined) set of 2 consecutive keypoints in batch sequence	#max number of reference sets in batch sequence (if less reference sets detected in sequence some normalised snapshots will be filled with zeros)
-	Q = 1	#the last R (user defined) set of 2 keypoints (of distance Q) in batch sequence
+	referenceSetPosDelimitersTagStr = referenceSetPosDelimiterTypes
+	referenceSetPosDelimitersTextStr = []
+	referenceSetPosDelimitersTextStr.append(sentenceCharDelimiterTypes)
+	referenceSetPosDelimitersTextStr.append(paragraphCharDelimiterTypes)
 	
-#referenceSetPosDelimitersPosStr = {"PUNCT", "VERB", "ADP"}
-#referenceSetPosDelimitersPosStr = {"PUNCT", "VERB"}
-##referenceSetPosDelimitersTagStr = {".", "VB", "VBD", "VBG", "VBN", "VBP", "VBZ", "IN", "TO", "CC", ",", ";"}       # identical to TF version
-referenceSetPosDelimitersTagStr = {".", "VB", "VBD", "VBG", "VBN", "VBP", "VBZ"}	#verbs only	#TODO: collapse auxiliary verbs (eg tagged as VBZ/VBD) with adjacent VBN into single ref set delimiter; eg has [VBZ] run [VBN], had [VBD] gone [VBN] -> has_run [VBZ], had_gone [VBD]
+
 #keypointMode="firstKeypointConsecutivePairs"	 #out shape = (B1*R, C, L2)
 keypointMode="firstKeypointPairs"	 	#out shape = (B1*R*Q, C, L2)	#default (requires testing)
-if(keypointMode == "firstKeypointConsecutivePairs"):
-	S = R
-elif(keypointMode == "firstKeypointPairs"):
-	S = R*Q
+
+if(not ATNLPusePredictionHead):
+	if(keypointMode == "firstKeypointConsecutivePairs"):
+		S = R
+	elif(keypointMode == "firstKeypointPairs"):
+		S = R*Q
+	#def getS(R, Q):
+	#return S
 		
 useNLPDatasetMultipleTokenisation = True	#mandatory: True	#required for spacy tokenisation
 if(useNLPDatasetMultipleTokenisation):

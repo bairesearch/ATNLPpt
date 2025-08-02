@@ -443,7 +443,7 @@ elif(useNLPDataset):
 	trainNumberOfEpochs = 1	#default: 1	#with increased epochs can significantly increase train accuracy on train dataset (though should theoretically have no effect on test accuracy)
 	if(useAlgorithmATNLP):
 		B1 = batchSize
-		B2 = B1*S	#B2 is encapsulates the number of normalisations (sets of 2 keypoints); either b) B1*R or c) B1*R*Q
+		#B2 = B1*S	#B2 is encapsulates the number of normalisations (sets of 2 keypoints); either b) B1*R or c) B1*R*Q
 	
 def round_up_to_power_of_2(x: float) -> int:
 	if x <= 0:

@@ -675,11 +675,13 @@ elif(useNLPDataset):
 					sp_ids = [to_int64(tok.orth) for tok in doc][:contextSizeMaxSpacyTokens]	#tok.lex_id gives -1 for all tokens (require to link a lexeme/vector cache)	#posStringToPosInt(nlp, tok.text) appears equivalent to tok.orth
 					sp_pos = [to_int64(int(tok.pos)) for tok in doc][:contextSizeMaxSpacyTokens]		#sp_pos = [to_uint64(to_int64(int(tok.pos)))    for tok in doc][:contextSizeMaxSpacyTokens]
 					sp_tag = [to_int64(tok.tag) for tok in doc][:contextSizeMaxSpacyTokens]
+					sp_text = [tok.text for tok in doc][:contextSizeMaxSpacyTokens]
 					sp_off = [ (tok.idx, tok.idx+len(tok)) for tok in doc][:contextSizeMaxSpacyTokens]
 					#print("sp_ids = ", sp_ids)
 					out["spacy_input_ids"].append(sp_ids)
 					out["spacy_pos"].append(sp_pos)
 					out["spacy_tag"].append(sp_tag)
+					out["spacy_text"].append(sp_text)
 					out["spacy_offsets"].append(sp_off)
 
 			return out
@@ -716,6 +718,11 @@ elif(useNLPDataset):
 				for i, s in enumerate(seqs):
 					out[i, :len(s)] = pt.tensor(s, dtype=pt.long)
 				return out
+			PAD_STR  = "<PAD>"   # or "" if you prefer blank
+			PAD_INT  = 0         # same pad id you used before
+			def pad_text(seqs, pad_token=PAD_STR):  # <- NEW helper for strings
+				L = max(len(s) for s in seqs)
+				return [ s + [pad_token]*(L-len(s)) for s in seqs ]   # list-of-lists
 			# -------------------------------------------------------------------
 			if(useNLPDatasetMultipleTokenisationChar):
 				char_ids   = pad1d([s["char_input_ids"]   for s in batch], NLPpadTokenID)
@@ -726,6 +733,7 @@ elif(useNLPDataset):
 				spacy_ids  = pad1d([s["spacy_input_ids"]  for s in batch], 0)
 				spacy_pos  = pad1d([s["spacy_pos"]        for s in batch], 0)
 				spacy_tag  = pad1d([s["spacy_tag"]        for s in batch], 0)
+				spacy_text = pad_text([s["spacy_text"] for s in batch])
 				spacy_off  = pad2d([s["spacy_offsets"]    for s in batch])
 
 			x = {}
@@ -743,6 +751,7 @@ elif(useNLPDataset):
 					"spacy_input_ids": spacy_ids,
 					"spacy_pos"      : spacy_pos,
 					"spacy_tag"      : spacy_tag,
+					"spacy_text"     : spacy_text,
 					"spacy_offsets"  : spacy_off,
 				}
 					
@@ -772,6 +781,7 @@ elif(useNLPDataset):
 				"spacy_input_ids": (B, Ls),
 				"spacy_pos"      : (B, Ls),
 				"spacy_tag"      : (B, Ls),
+				"spacy_text"      : (B, Ls),
 				"spacy_offsets"  : (B, Ls, 2),
 			'''
 	else:

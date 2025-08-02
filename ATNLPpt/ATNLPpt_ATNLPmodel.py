@@ -23,7 +23,8 @@ from typing import List, Optional, Tuple
 from ANNpt_globalDefs import *
 import ATNLPpt_ATNLPmodelContinuousVarEncoding
 import ATNLPpt_keypoints
-import ATNLPpt_normalisation
+import ATNLPpt_pos
+import ATNLPpt_transformation
 if(ATNLPusePredictionHead):
 	import ATNLPpt_prediction
 else:
@@ -36,7 +37,7 @@ from collections import defaultdict
 
 	
 class ATNLPconfig():
-	def __init__(self, batchSize, numberOfLayers, hiddenLayerSize, inputLayerSize, outputLayerSize, numberOfFeatures, numberOfClasses, fieldTypeList):
+	def __init__(self, batchSize, numberOfLayers, hiddenLayerSize, inputLayerSize, outputLayerSize, numberOfFeatures, numberOfClasses):
 		self.batchSize = batchSize
 		self.numberOfLayers = numberOfLayers
 		self.hiddenLayerSize = hiddenLayerSize
@@ -44,7 +45,6 @@ class ATNLPconfig():
 		self.outputLayerSize = outputLayerSize
 		self.numberOfFeatures = numberOfFeatures
 		self.numberOfClasses = numberOfClasses
-		self.fieldTypeList = fieldTypeList
 
 		
 # -------------------------------------------------------------
@@ -63,11 +63,12 @@ class ATNLPmodel(nn.Module):
 		self.config = config
 
 		if(ATNLPusePredictionHead):
-			if(ATNLPuseSequenceLevelPrediction):
-				d_input = L2*C
-			else:
-				d_input = C
-			self.predictionModel = ATNLPpt_prediction.DenseSnapshotModel(d_input, d_model, backbone=backboneType).to(device)
+			self.predictionModel = nn.ModuleList()
+			for l in range(ATNLPmultiLevels):
+				d_input = C		#UPDATE THIS
+				d_model_prev = d_model	#UPDATE THIS
+				self.predictionModel.append(ATNLPpt_prediction.DenseSnapshotModel(d_input, d_model_prev, backbone=backboneType))
+			self.predictionModel.to(device)
 		else:
 			# -----------------------------
 			# database declaration
@@ -96,12 +97,31 @@ class ATNLPmodel(nn.Module):
 	# ---------------------------------------------------------
 	# Forward pass
 	# ---------------------------------------------------------
-		
+
 	#@torch.inference_mode()	#not supported by ATNLPusePredictionHead
 	@torch.no_grad()
 	def forward(self, trainOrTest: bool, x: torch.Tensor, y: Optional[torch.Tensor] = None, optim=None, l=None, batchIndex=None, fieldTypeList=None) -> Tuple[torch.Tensor, torch.Tensor]:
+		if(ATNLPusePredictionHead):
+			normalisedSnapshotsPrevLevel = None
+			lossAvg, accAvg = (0.0, 0.0)
+			for l in range(ATNLPmultiLevels):
+				if(debugSequentialLoops):
+					print("\nl = ", l)
+				if(trainOrTest):
+					opt = optim[l]
+				else:
+					opt = None
+				loss, accuracy, normalisedSnapshotsPrevLevel = self.executeModel(trainOrTest, x, y, opt, l, normalisedSnapshotsPrevLevel)
+				lossAvg += loss
+				accAvg += accuracy
+			loss = loss/ATNLPmultiLevels
+			accuracy = accuracy/ATNLPmultiLevels
+		else:
+			loss, accuracy, _ = self.executeModel(trainOrTest, x, y, optim, l)
+		return loss, accuracy
+	
+	def executeModel(self, trainOrTest: bool, x: torch.Tensor, y, optim, l, normalisedSnapshotsPrevLevel=None) -> Tuple[torch.Tensor, torch.Tensor]:
 		"""Forward pass.
-		
 		Args:
 			trainOrTest: True=> train mode; False=> inference.
 			x: dict of different data types;
@@ -112,18 +132,23 @@ class ATNLPmodel(nn.Module):
 					"bert_input_ids" : (B, Lb),
 					"bert_offsets"   : (B, Lb, 2),
 				"spacy_input_ids": (B, Ls),
-				"spacy_pos"	  : (B, Ls),
+				"spacy_pos"      : (B, Ls),
+				"spacy_tag"      : (B, Ls),
+				"spacy_text"     : (B, Ls),
 				"spacy_offsets"  : (B, Ls, 2),
 			y: None
 				dynamically generated; (batch,) int64 labels when trainOrTest==True.
-				
 		Returns:
 			predictions, outputActivations (both shape (batch, classes)).
 		"""
 		
-		seq_input = self.generateSequenceInput(x)			
-		B1 = self.batchSize = seq_input.shape[0]
-		device = seq_input.device
+		kp_indices_batch, kp_meta_batch, kp_prev_level_used_batch = ATNLPpt_keypoints.build_keypoints(l, x['spacy_input_ids'], x['spacy_pos'], x['spacy_tag'], x['spacy_text'], x['spacy_offsets'])
+		if(debugATNLPkeypoints):
+			print("kp_indices_batch = ", kp_indices_batch)
+			
+		if(l == 0):
+			seq_input = self.generateSequenceInput(x)
+			B1 = self.batchSize = seq_input.shape[0]
 
 		if(useSlidingWindow):
 			if(useNLPDatasetPaddingMask):	
@@ -139,74 +164,90 @@ class ATNLPmodel(nn.Module):
 		else:
 			numSubsamples = 1
 	
-		# -----------------------------
-		# Continuous var encoding as bits
-		# -----------------------------
-		seq_input_encoded = ATNLPpt_ATNLPmodelContinuousVarEncoding.encodeContinuousVarsAsBits(self, seq_input, ATNLPcontinuousVarEncodingNumBits).float()	#NLPcharacterInputSetLen	#[batchSize, sequenceLength*numBits]
-		#seq_token_tensor = encodeContinuousVarsAsBits(self, x['bert_input_ids'], bertNumberTokenTypes).to(torch.int8)	#[batchSize, sequenceLength*numBits]
-
-		seq_input_encoded = seq_input_encoded.reshape(B1, L1, C)	 #shape (B1, L1, C)
-		seq_input_encoded = seq_input_encoded.permute(0, 2, 1)	 #shape (B1, C, L1)
-
-		kp_indices_batch, kp_meta_batch = ATNLPpt_keypoints.build_keypoints(x['spacy_input_ids'], x['spacy_pos'], x['spacy_tag'], x['spacy_offsets'])
-		if(debugATNLPkeypoints):
-			print("kp_indices_batch = ", kp_indices_batch)
-		
+		if(l == 0):
+			# -----------------------------
+			# Continuous var encoding as bits
+			# -----------------------------
+			seq_input_encoded = ATNLPpt_ATNLPmodelContinuousVarEncoding.encodeContinuousVarsAsBits(self, seq_input, ATNLPcontinuousVarEncodingNumBits).float()	#NLPcharacterInputSetLen	#[batchSize, sequenceLength*numBits]
+			#seq_token_tensor = encodeContinuousVarsAsBits(self, x['bert_input_ids'], bertNumberTokenTypes).to(torch.int8)	#[batchSize, sequenceLength*numBits]
+			seq_input_encoded = seq_input_encoded.reshape(B1, L1, C)	 #shape (B1, L1, C)
+			seq_input_encoded = seq_input_encoded.permute(0, 2, 1)	 #shape (B1, C, L1)
+			
 		numSubsamplesWithKeypoints = 0
 		accuracyAllWindows = 0.0
 		lossAllWindows = 0.0
 		#print("numSubsamples = ", numSubsamples)
 		for slidingWindowIndex in range(numSubsamples):
 			if(debugSequentialLoops):
-				print("\n************************** slidingWindowIndex = ", slidingWindowIndex)
+				print("\n\tslidingWindowIndex = ", slidingWindowIndex)
 
 			# -----------------------------
 			# Transformation (normalisation)
 			# -----------------------------
-			if(useSlidingWindow):
-				last_token_idx = slidingWindowIndex
-			else:
+			if(ATNLPusePredictionHead):
 				last_token_idx = contextSizeMax
-			normalisedSnapshots, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid = ATNLPpt_normalisation.normalise_batch(seq_input_encoded, x['spacy_pos'], x['spacy_offsets'], last_token_idx, mode=keypointMode, R=R, Q=Q, L2=L2, kp_indices_batch=kp_indices_batch, kp_meta_batch=kp_meta_batch)
+				Rcurr, Qcurr, L2curr = R[l], Q[l], L2[l]
+			else:
+				last_token_idx = slidingWindowIndex
+				Rcurr, Qcurr, L2curr = R, Q, L2
+				
+			if(l==0):
+				foundKeypointPairs, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid, src_ids = ATNLPpt_keypoints.generate_keypoint_pairs(B1, Rcurr, Qcurr, keypointMode, device, x["spacy_offsets"], last_token_idx, kp_indices_batch, kp_meta_batch)
+			else:
+				normalisedSequencePrevLevel = self.predictionModel[l].generateNormalisedSequence(normalisedSnapshotsPrevLevel)	 #shape (B1prev*Qprev, Rprev*L2prev, C)
+				foundKeypointPairs, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid, src_ids = ATNLPpt_keypoints.generate_keypoint_pairs_from_prev_level(l, keypointMode, device, normalisedSequencePrevLevel, kp_prev_level_used_batch)
+				seq_input_encoded = normalisedSequencePrevLevel.permute(0, 2, 1)	 #shape (B1prev*Qprev, C, Rprev*L2prev)
+				#print("seq_input_encoded.count_nonzero() = ", seq_input_encoded.count_nonzero())
+				#print("keypointPairsCharIdx = ", keypointPairsCharIdx)
+
+			normalisedSnapshots, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid = ATNLPpt_transformation.transform_batch(seq_input_encoded, Rcurr, Qcurr, L2curr, foundKeypointPairs, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid, src_ids)
+			
+			#print("normalisedSnapshots.count_nonzero() = ", normalisedSnapshots.count_nonzero())
+			
 			if(debugATNLPnormalisation):
 				print("seq_input_encoded = ", seq_input_encoded)	
 				print("normalisedSnapshots = ", normalisedSnapshots)
 				print("normalisedSnapshots.count_nonzero() = ", normalisedSnapshots.count_nonzero())
 			
-			if(self.detectValidNormalisedSnapshot(normalisedSnapshots)):
-				numSubsamplesWithKeypoints += 1
-			else:
-				continue
-		
+
 			# -----------------------------
 			# Train/Prediction
 			# -----------------------------	
 			if(ATNLPusePredictionHead):
 				#print("normalisedSnapshots.shape = ", normalisedSnapshots.shape)
-				normalisedSnapshots = normalisedSnapshots.reshape(B1, R, Q, C, L2)	#reshape to (B1, R, Q, C, L2)
+				#B2, S, C, L2 = normalisedSnapshots.shape	#(B1,S,C,L2)
+				B1curr = normalisedSnapshots.shape[0]
+				normalisedSnapshots = normalisedSnapshots.reshape(B1curr, R[l], Q[l], C, L2[l])	#reshape to (B1, R, Q, C, L2)
 				normalisedSnapshots = normalisedSnapshots.permute(0, 2, 1, 4, 3)	#(B1, Q, R, L2, C)
-				normalisedSequence = self.predictionModel.generateNormalisedSequence(normalisedSnapshots)	#transformer/wavenet: (B1*Q, R*L2, C)
-				if(useSlidingWindow):
-					y, _ = self.generateClassTargetsSlidingWindow(slidingWindowIndex, normalisedSnapshots)	#legacy
+				if(self.detectValidNormalisedSnapshot(normalisedSnapshots)):
+					numSubsamplesWithKeypoints += 1
 				else:
-					y = self.generateClassTargetsAll(normalisedSequence)
+					continue
+					
+				normalisedSequence = self.predictionModel[l].generateNormalisedSequence(normalisedSnapshots)	#transformer/wavenet: (B1*Q, R*L2, C)
+				y = self.generateClassTargetsAll(normalisedSequence)
 				
 				if(trainOrTest):
 					with torch.enable_grad():
-						self.predictionModel.train()
-						logits = self.predictionModel(normalisedSnapshots)
+						self.predictionModel[l].train()
+						logits = self.predictionModel[l](normalisedSnapshots)
 						loss = ATNLPpt_prediction.loss_function(logits, y)
 						optim.zero_grad()
 						loss.backward()
 						optim.step()
 				else:
-					self.predictionModel.eval()
-					logits = self.predictionModel(normalisedSnapshots)
+					self.predictionModel[l].eval()
+					logits = self.predictionModel[l](normalisedSnapshots)
 					loss = ATNLPpt_prediction.loss_function(logits, y)
 				matches = ATNLPpt_prediction.calculate_matches(logits, y)
 				loss = loss.item()
 				comparisonFound = True
 			else:
+				if(self.detectValidNormalisedSnapshot(normalisedSnapshots)):
+					numSubsamplesWithKeypoints += 1
+				else:
+					continue
+				
 				y, classTargets = self.generateClassTargetsSlidingWindow(slidingWindowIndex, normalisedSnapshots, seq_input)
 
 				normalisedSnapshots = normalisedSnapshots.to_sparse_coo()
@@ -253,10 +294,14 @@ class ATNLPmodel(nn.Module):
 			if(ATNLPsnapshotDatabaseDisk and trainOrTest):
 				self.closeSnapshotDatabase()
 	
-		accuracy = accuracyAllWindows / numSubsamplesWithKeypoints
-		loss = lossAllWindows / numSubsamplesWithKeypoints
-
-		return loss, accuracy
+		if(numSubsamples > 1):
+			accuracy = accuracyAllWindows / numSubsamplesWithKeypoints
+			loss = lossAllWindows / numSubsamplesWithKeypoints
+		else:
+			accuracy = accuracyAllWindows
+			loss = lossAllWindows
+			
+		return loss, accuracy, normalisedSnapshots
 	
 	def calculateAccuracy(self, matches, y):
 		# count how many are exactly correct
@@ -310,9 +355,9 @@ class ATNLPmodel(nn.Module):
 		
 	def getReferenceSetDelimiterIDmax(self):
 		referenceSetDelimiterIDmax = 0
-		referenceSetDelimiterIDmax += 1	#"."
-		referenceSetDelimiterIDmax += len(ATNLPpt_keypoints.verb_dict)
-		#referenceSetDelimiterIDmax += len(ATNLPpt_keypoints.prep_dict)
+		referenceSetDelimiterIDmax += len(ATNLPpt_pos.verb_dict)	#l=1	#+len(ATNLPpt_pos.prep_dict)
+		referenceSetDelimiterIDmax += 1	#"." etc	#l=2
+		referenceSetDelimiterIDmax += 1	#"\n" etc	#l=3
 		return referenceSetDelimiterIDmax
 
 	def getReferenceSetDelimiterID(self, keypointPairsIndexFirst, kp_meta_batch):
@@ -326,34 +371,39 @@ class ATNLPmodel(nn.Module):
 		referenceSetDelimiterID = 0
 		#print("spacy_input_id = ", spacy_input_id)
 		#print("spacy_pos = ", spacy_pos)
-		#print("ATNLPpt_keypoints.punctPosId = ", ATNLPpt_keypoints.punctPosId)
-		#print("ATNLPpt_keypoints.verbPosId = ", ATNLPpt_keypoints.verbPosId)
-		if(spacy_pos == ATNLPpt_keypoints.punctPosId):
-			referenceSetsFirstDelimiterString = lexIntToLexString(ATNLPpt_keypoints.nlp, spacy_input_id)
-			#print("punctPosId: referenceSetsFirstDelimiterString = ", referenceSetsFirstDelimiterString)
-			if(referenceSetsFirstDelimiterString == "."):
-				referenceSetDelimiterID += 1	#"."
-		elif(spacy_pos == ATNLPpt_keypoints.verbPosId):
-			referenceSetsFirstDelimiterString = lexIntToLexString(ATNLPpt_keypoints.nlp, spacy_input_id)
+		#print("ATNLPpt_pos.punctPosId = ", ATNLPpt_pos.punctPosId)
+		#print("ATNLPpt_pos.verbPosId = ", ATNLPpt_pos.verbPosId)
+		if(spacy_pos == ATNLPpt_pos.verbPosId):	#l=1
+			referenceSetsFirstDelimiterString = lexIntToLexString(ATNLPpt_pos.nlp, spacy_input_id)
 			#print("verbPosId: referenceSetsFirstDelimiterString = ", referenceSetsFirstDelimiterString)
-			referenceSetDelimiterID += 1
-			if referenceSetsFirstDelimiterString in ATNLPpt_keypoints.verb_dict:
-				verbIndex = ATNLPpt_keypoints.verb_dict[referenceSetsFirstDelimiterString]
+			if referenceSetsFirstDelimiterString in ATNLPpt_pos.verb_dict:
+				verbIndex = ATNLPpt_pos.verb_dict[referenceSetsFirstDelimiterString]
 				#print("verbIndex = ", verbIndex)
 				referenceSetDelimiterID += verbIndex
 			else:
 				printe("referenceSetsFirstDelimiterString not in verb_dict, referenceSetsFirstDelimiterString = " + referenceSetsFirstDelimiterString)
-		'''
-		elif(spacy_pos == ATNLPpt_keypoints.prepositionPosId):
-			referenceSetsFirstDelimiterString = posIntToPosString(ATNLPpt_keypoints.nlp, spacy_input_id)
-			print("referenceSetsFirstDelimiterString = ", referenceSetsFirstDelimiterString)
-			referenceSetDelimiterID += 1
-			referenceSetDelimiterID += len(ATNLPpt_keypoints.verb_dict)
-			if referenceSetsFirstDelimiterString in ATNLPpt_keypoints.prep_dict:
-				referenceSetDelimiterID += prep_dict[referenceSetsFirstDelimiterString]
-			else:
-				printe("referenceSetsFirstDelimiterString not in prep_dict, referenceSetsFirstDelimiterString = " + referenceSetsFirstDelimiterString)
-		'''
+			'''
+			elif(spacy_pos == ATNLPpt_pos.prepositionPosId):
+				referenceSetsFirstDelimiterString = posIntToPosString(ATNLPpt_pos.nlp, spacy_input_id)
+				print("referenceSetsFirstDelimiterString = ", referenceSetsFirstDelimiterString)
+				referenceSetDelimiterID += len(ATNLPpt_pos.verb_dict)
+				if referenceSetsFirstDelimiterString in ATNLPpt_pos.prep_dict:
+					referenceSetDelimiterID += prep_dict[referenceSetsFirstDelimiterString]
+				else:
+					printe("referenceSetsFirstDelimiterString not in prep_dict, referenceSetsFirstDelimiterString = " + referenceSetsFirstDelimiterString)
+			'''
+		elif(spacy_pos == ATNLPpt_pos.punctPosId):	#l=2
+			referenceSetDelimiterID += len(ATNLPpt_pos.verb_dict)
+			referenceSetsFirstDelimiterString = lexIntToLexString(ATNLPpt_pos.nlp, spacy_input_id)
+			#print("punctPosId: referenceSetsFirstDelimiterString = ", referenceSetsFirstDelimiterString)
+			if(referenceSetsFirstDelimiterString in sentenceCharDelimiterTypes):
+				referenceSetDelimiterID += 1	#"."
+		elif(spacy_pos == ATNLPpt_pos.otherPosId):	#l=3
+			referenceSetDelimiterID += len(ATNLPpt_pos.verb_dict)
+			referenceSetsFirstDelimiterString = lexIntToLexString(ATNLPpt_pos.nlp, spacy_input_id)
+			#print("punctPosId: referenceSetsFirstDelimiterString = ", referenceSetsFirstDelimiterString)
+			if(referenceSetsFirstDelimiterString in paragraphCharDelimiterTypes):
+				referenceSetDelimiterID += 1	#"\n"
 
 		return referenceSetDelimiterID
 
@@ -438,12 +488,12 @@ class ATNLPmodel(nn.Module):
 			Returns
 				ids_per_char : (B, Lc)  int64
 			"""
-			
+
 			bert_input_ids = x['bert_input_ids'].to(device)	# (B, Lb)	 int64
 			bert_offsets = x['bert_offsets'].to(device)	#(B, Lb, 2)  int64
 			Lc = contextSizeMax
 			pad_id = NLPpadTokenID
-			
+
 			# ------------------------------------------------------------------
 			B, Lb = bert_input_ids.shape
 
@@ -465,9 +515,6 @@ class ATNLPmodel(nn.Module):
 			ids_per_char = bert_input_ids.gather(1, token_idx)			  # (B,Lc)
 			ids_per_char[no_cover] = pad_id
 			seq_input = ids_per_char
-				
 		return seq_input
-
-
 
 

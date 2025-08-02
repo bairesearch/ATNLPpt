@@ -69,13 +69,9 @@ def createModel(dataset):
 		outputLayerSize = numberOfClasses,
 		numberOfFeatures = numberOfFeatures,
 		numberOfClasses = numberOfClasses,
-		fieldTypeList = fieldTypeList,
 	)
 	model = ATNLPpt_ATNLPmodel.ATNLPmodel(config)
 	print(model)
 
 	return model
-
-
-
 

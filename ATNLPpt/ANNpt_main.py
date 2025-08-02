@@ -139,6 +139,8 @@ def processDataset(trainOrTest, dataset, model):
 	if(trainOrTest):
 		if(useCustomLearningAlgorithm):
 			optim = []
+		elif(useAlgorithmATNLP and trainLocal):
+			optim = [createOptimiser(model)] * ATNLPmultiLevels
 		elif(useAlgorithmEIANN and trainLocal):
 			optim = []
 			optim += [createOptimiser(model)]
@@ -312,6 +314,7 @@ def propagate(trainOrTest, batchIndex, batch, model, optim=None, l=None, fieldTy
 		loss, accuracy = model(trainOrTest, x, y, optim, l, batchIndex, fieldTypeList)
 	else:
 		loss, accuracy = model(trainOrTest, x, y, optim, l)
+		
 	return loss, accuracy
 
 def print_tqdm_output(epoch: int, start_time: float, batch_index: int, loss: float, accuracy: float, file_path: str = "log.txt"):
