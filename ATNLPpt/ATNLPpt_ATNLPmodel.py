@@ -114,8 +114,8 @@ class ATNLPmodel(nn.Module):
 				loss, accuracy, normalisedSnapshotsPrevLevel = self.executeModel(trainOrTest, x, y, opt, l, normalisedSnapshotsPrevLevel)
 				lossAvg += loss
 				accAvg += accuracy
-			loss = loss/ATNLPmultiLevels
-			accuracy = accuracy/ATNLPmultiLevels
+			loss = lossAvg/ATNLPmultiLevels
+			accuracy = accAvg/ATNLPmultiLevels
 		else:
 			loss, accuracy, _ = self.executeModel(trainOrTest, x, y, optim, l)
 		return loss, accuracy
@@ -193,22 +193,21 @@ class ATNLPmodel(nn.Module):
 				
 			if(l==0):
 				foundKeypointPairs, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid, src_ids = ATNLPpt_keypoints.generate_keypoint_pairs(B1, Rcurr, Qcurr, keypointMode, device, x["spacy_offsets"], last_token_idx, kp_indices_batch, kp_meta_batch)
+				#print("keypointPairsCharIdx = ", keypointPairsCharIdx)
 			else:
 				normalisedSequencePrevLevel = self.predictionModel[l].generateNormalisedSequence(normalisedSnapshotsPrevLevel)	 #shape (B1prev*Qprev, Rprev*L2prev, C)
 				foundKeypointPairs, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid, src_ids = ATNLPpt_keypoints.generate_keypoint_pairs_from_prev_level(l, keypointMode, device, normalisedSequencePrevLevel, kp_prev_level_used_batch)
 				seq_input_encoded = normalisedSequencePrevLevel.permute(0, 2, 1)	 #shape (B1prev*Qprev, C, Rprev*L2prev)
 				#print("seq_input_encoded.count_nonzero() = ", seq_input_encoded.count_nonzero())
 				#print("keypointPairsCharIdx = ", keypointPairsCharIdx)
+				#print("seq_input_encoded.count_nonzero() = ", seq_input_encoded.count_nonzero())
 
 			normalisedSnapshots, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid = ATNLPpt_transformation.transform_batch(seq_input_encoded, Rcurr, Qcurr, L2curr, foundKeypointPairs, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid, src_ids)
-			
-			#print("normalisedSnapshots.count_nonzero() = ", normalisedSnapshots.count_nonzero())
-			
+
 			if(debugATNLPnormalisation):
 				print("seq_input_encoded = ", seq_input_encoded)	
 				print("normalisedSnapshots = ", normalisedSnapshots)
-				print("normalisedSnapshots.count_nonzero() = ", normalisedSnapshots.count_nonzero())
-			
+				print("l = ", l, ", normalisedSnapshots.count_nonzero() = ", normalisedSnapshots.count_nonzero())
 
 			# -----------------------------
 			# Train/Prediction
@@ -219,11 +218,12 @@ class ATNLPmodel(nn.Module):
 				B1curr = normalisedSnapshots.shape[0]
 				normalisedSnapshots = normalisedSnapshots.reshape(B1curr, R[l], Q[l], C, L2[l])	#reshape to (B1, R, Q, C, L2)
 				normalisedSnapshots = normalisedSnapshots.permute(0, 2, 1, 4, 3)	#(B1, Q, R, L2, C)
+				
 				if(self.detectValidNormalisedSnapshot(normalisedSnapshots)):
 					numSubsamplesWithKeypoints += 1
 				else:
 					continue
-					
+
 				normalisedSequence = self.predictionModel[l].generateNormalisedSequence(normalisedSnapshots)	#transformer/wavenet: (B1*Q, R*L2, C)
 				y = self.generateClassTargetsAll(normalisedSequence)
 				
@@ -252,7 +252,6 @@ class ATNLPmodel(nn.Module):
 
 				normalisedSnapshots = normalisedSnapshots.to_sparse_coo()
 				normalisedSnapshots = normalisedSnapshots.coalesce()
-				#if(ATNLPsnapshotDatabaseLoadDevice):
 
 				if(ATNLPindexDatabaseByClassTarget):
 					if(ATNLPsnapshotDatabaseDisk):
@@ -300,7 +299,8 @@ class ATNLPmodel(nn.Module):
 		else:
 			accuracy = accuracyAllWindows
 			loss = lossAllWindows
-			
+		#print("l = ", l, ", loss = ", loss)
+		
 		return loss, accuracy, normalisedSnapshots
 	
 	def calculateAccuracy(self, matches, y):

@@ -176,9 +176,7 @@ if(ATNLPuseMultiLevelTokenPrediction):
 			referenceSetPosDelimitersStr.append(paragraphCharDelimiterTypes)	#new line/paragaph added for ATNLPuseMultiLevelTokenPrediction compatibility (paragraph sequences)
 else:
 	referenceSetPosDelimitersTagStr = referenceSetPosDelimiterTypes
-	referenceSetPosDelimitersTextStr = []
-	referenceSetPosDelimitersTextStr.append(sentenceCharDelimiterTypes)
-	referenceSetPosDelimitersTextStr.append(paragraphCharDelimiterTypes)
+	referenceSetPosDelimitersTextStr = sentenceCharDelimiterTypes + paragraphCharDelimiterTypes
 	
 
 #keypointMode="firstKeypointConsecutivePairs"	 #out shape = (B1*R, C, L2)

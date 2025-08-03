@@ -65,8 +65,10 @@ if(ATNLPuseMultiLevelTokenPrediction):
 		else:
 			referenceSetPosDelimitersText[l] = []
 else:
-	referenceSetPosDelimitersTagId[0] = [posStringToPosInt(nlp, string) for string in referenceSetPosDelimitersTagStr[l]]
+	referenceSetPosDelimitersTagId[0] = [posStringToPosInt(nlp, string) for string in referenceSetPosDelimitersTagStr]
 	referenceSetPosDelimitersText[0] = referenceSetPosDelimitersTextStr
+#print("referenceSetPosDelimitersTagId = ", referenceSetPosDelimitersTagId)
+#print("referenceSetPosDelimitersText = ", referenceSetPosDelimitersText)
 
 verbPosId = posStringToPosInt(nlp, "VERB")
 prepositionPosId = posStringToPosInt(nlp, "ADP")
