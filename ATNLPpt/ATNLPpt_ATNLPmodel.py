@@ -65,9 +65,11 @@ class ATNLPmodel(nn.Module):
 		if(ATNLPusePredictionHead):
 			self.predictionModel = nn.ModuleList()
 			for l in range(ATNLPmultiLevels):
-				d_input = C		#UPDATE THIS
-				d_model_prev = d_model	#UPDATE THIS
-				self.predictionModel.append(ATNLPpt_prediction.DenseSnapshotModel(d_input, d_model_prev, backbone=backboneType))
+				if(ATNLPuseSequenceLevelPrediction):
+					d_input = L2[l]*C
+				else:
+					d_input = C
+				self.predictionModel.append(ATNLPpt_prediction.DenseSnapshotModel(d_input, d_model, backbone=backboneType))
 			self.predictionModel.to(device)
 		else:
 			# -----------------------------
@@ -141,7 +143,7 @@ class ATNLPmodel(nn.Module):
 		Returns:
 			predictions, outputActivations (both shape (batch, classes)).
 		"""
-		
+				
 		kp_indices_batch, kp_meta_batch, kp_prev_level_used_batch = ATNLPpt_keypoints.build_keypoints(l, x['spacy_input_ids'], x['spacy_pos'], x['spacy_tag'], x['spacy_text'], x['spacy_offsets'])
 		if(debugATNLPkeypoints):
 			print("kp_indices_batch = ", kp_indices_batch)
@@ -169,14 +171,12 @@ class ATNLPmodel(nn.Module):
 			# Continuous var encoding as bits
 			# -----------------------------
 			seq_input_encoded = ATNLPpt_ATNLPmodelContinuousVarEncoding.encodeContinuousVarsAsBits(self, seq_input, ATNLPcontinuousVarEncodingNumBits).float()	#NLPcharacterInputSetLen	#[batchSize, sequenceLength*numBits]
-			#seq_token_tensor = encodeContinuousVarsAsBits(self, x['bert_input_ids'], bertNumberTokenTypes).to(torch.int8)	#[batchSize, sequenceLength*numBits]
 			seq_input_encoded = seq_input_encoded.reshape(B1, L1, C)	 #shape (B1, L1, C)
 			seq_input_encoded = seq_input_encoded.permute(0, 2, 1)	 #shape (B1, C, L1)
 			
 		numSubsamplesWithKeypoints = 0
 		accuracyAllWindows = 0.0
 		lossAllWindows = 0.0
-		#print("numSubsamples = ", numSubsamples)
 		for slidingWindowIndex in range(numSubsamples):
 			if(debugSequentialLoops):
 				print("\n\tslidingWindowIndex = ", slidingWindowIndex)
@@ -193,14 +193,10 @@ class ATNLPmodel(nn.Module):
 				
 			if(l==0):
 				foundKeypointPairs, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid, src_ids = ATNLPpt_keypoints.generate_keypoint_pairs(B1, Rcurr, Qcurr, keypointMode, device, x["spacy_offsets"], last_token_idx, kp_indices_batch, kp_meta_batch)
-				#print("keypointPairsCharIdx = ", keypointPairsCharIdx)
 			else:
-				normalisedSequencePrevLevel = self.predictionModel[l].generateNormalisedSequence(normalisedSnapshotsPrevLevel)	 #shape (B1prev*Qprev, Rprev*L2prev, C)
+				normalisedSequencePrevLevel = self.predictionModel[l].generateNormalisedSequence(normalisedSnapshotsPrevLevel, supportSequenceLevelPrediction=False)	 #shape (B1prev*Qprev, Rprev*L2prev, C)	#do not format transform_batch input for sequence level prediction 
 				foundKeypointPairs, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid, src_ids = ATNLPpt_keypoints.generate_keypoint_pairs_from_prev_level(l, keypointMode, device, normalisedSequencePrevLevel, kp_prev_level_used_batch)
 				seq_input_encoded = normalisedSequencePrevLevel.permute(0, 2, 1)	 #shape (B1prev*Qprev, C, Rprev*L2prev)
-				#print("seq_input_encoded.count_nonzero() = ", seq_input_encoded.count_nonzero())
-				#print("keypointPairsCharIdx = ", keypointPairsCharIdx)
-				#print("seq_input_encoded.count_nonzero() = ", seq_input_encoded.count_nonzero())
 
 			normalisedSnapshots, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid = ATNLPpt_transformation.transform_batch(seq_input_encoded, Rcurr, Qcurr, L2curr, foundKeypointPairs, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid, src_ids)
 
@@ -213,9 +209,7 @@ class ATNLPmodel(nn.Module):
 			# Train/Prediction
 			# -----------------------------	
 			if(ATNLPusePredictionHead):
-				#print("normalisedSnapshots.shape = ", normalisedSnapshots.shape)
-				#B2, S, C, L2 = normalisedSnapshots.shape	#(B1,S,C,L2)
-				B1curr = normalisedSnapshots.shape[0]
+				B1curr = normalisedSnapshots.shape[0]	#(B1,S,C,L2)
 				normalisedSnapshots = normalisedSnapshots.reshape(B1curr, R[l], Q[l], C, L2[l])	#reshape to (B1, R, Q, C, L2)
 				normalisedSnapshots = normalisedSnapshots.permute(0, 2, 1, 4, 3)	#(B1, Q, R, L2, C)
 				

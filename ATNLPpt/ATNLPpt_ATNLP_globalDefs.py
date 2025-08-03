@@ -37,8 +37,8 @@ debugOnlyPrintStreamedWikiArticleTitles = False
 import torch as pt
 if pt.cuda.is_available():
 	deviceGPU = pt.device("cuda")
-#else:
-#	deviceGPU = pt.device("cpu")
+else:
+	deviceGPU = pt.device("cpu")
 deviceCPU = pt.device("cpu")
 
 referenceSetPosDelimiterTypes = ["VB", "VBD", "VBG", "VBN", "VBP", "VBZ"]	#prep: "IN", "TO"	#conj: "CC", ",", ";"

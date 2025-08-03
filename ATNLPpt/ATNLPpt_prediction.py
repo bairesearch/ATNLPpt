@@ -39,7 +39,7 @@ where
 * **Q**  - number of resolution snapshots per section,
 * **R**  - number of context sections,
 * **L2** - fixed normalised snapshot length.
-* **C**  - vocabulary size (e.g.30 522),
+* **C**  - vocabulary size (e.g. 30522),
 
 The model outputs one next-token prediction per element of the **B1** axis.
 
@@ -225,14 +225,13 @@ class DenseSnapshotModel(nn.Module):
 			self.decoder = DenseSnapshotDecoder(d_input, d_model)
 		else:
 			printe("Unknown backbone {backbone}")
-		self.proj = nn.Linear(d_model, d_input, bias=False)
 
 	
-	def generateNormalisedSequence(self, x):
+	def generateNormalisedSequence(self, x, supportSequenceLevelPrediction=True):
 		B1, Q, R, L2, C = x.shape
 		if self.backbone_type == "transformer" or self.backbone_type == "wavenet":
 			#no sliding window (generate predictions for each token)
-			if(ATNLPuseSequenceLevelPrediction):
+			if(ATNLPuseSequenceLevelPrediction and supportSequenceLevelPrediction):
 				x = x.reshape(B1*Q, R, L2*C)                        # (B1*Q, R, L2*C)
 			else:
 				x = x.reshape(B1*Q, R*L2, C)                        # (B1*Q, R*L2, C)
