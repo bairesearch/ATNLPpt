@@ -104,20 +104,29 @@ class ATNLPmodel(nn.Module):
 	@torch.no_grad()
 	def forward(self, trainOrTest: bool, x: torch.Tensor, y: Optional[torch.Tensor] = None, optim=None, l=None, batchIndex=None, fieldTypeList=None) -> Tuple[torch.Tensor, torch.Tensor]:
 		if(ATNLPusePredictionHead):
-			normalisedSnapshotsPrevLevel = None
-			lossAvg, accAvg = (0.0, 0.0)
-			for l in range(ATNLPmultiLevels):
-				if(debugSequentialLoops):
-					print("\nl = ", l)
+			if(ATNLPcompareUntransformedTokenPrediction):
 				if(trainOrTest):
-					opt = optim[l]
+					opt = optim[0]
 				else:
 					opt = None
-				loss, accuracy, normalisedSnapshotsPrevLevel = self.executeModel(trainOrTest, x, y, opt, l, normalisedSnapshotsPrevLevel)
-				lossAvg += loss
-				accAvg += accuracy
-			loss = lossAvg/ATNLPmultiLevels
-			accuracy = accAvg/ATNLPmultiLevels
+				loss, accuracy, _ = self.executeModel(trainOrTest, x, y, opt, l)
+			else:
+				normalisedSnapshotsPrevLevel = None
+				lossAvg, accAvg = (0.0, 0.0)
+				for l in range(ATNLPmultiLevels):
+					if(debugSequentialLoops):
+						print("\nl = ", l)
+					if(trainOrTest):
+						opt = optim[l]
+					else:
+						opt = None
+					loss, accuracy, normalisedSnapshotsPrevLevel = self.executeModel(trainOrTest, x, y, opt, l, normalisedSnapshotsPrevLevel)
+					if(not ATNLPmultiLevelOnlyPredictLastLevel):
+						lossAvg += loss
+						accAvg += accuracy
+				if(not ATNLPmultiLevelOnlyPredictLastLevel):
+					loss = lossAvg/ATNLPmultiLevels
+					accuracy = accAvg/ATNLPmultiLevels
 		else:
 			loss, accuracy, _ = self.executeModel(trainOrTest, x, y, optim, l)
 		return loss, accuracy
@@ -143,10 +152,11 @@ class ATNLPmodel(nn.Module):
 		Returns:
 			predictions, outputActivations (both shape (batch, classes)).
 		"""
-				
-		kp_indices_batch, kp_meta_batch, kp_prev_level_used_batch = ATNLPpt_keypoints.build_keypoints(l, x['spacy_input_ids'], x['spacy_pos'], x['spacy_tag'], x['spacy_text'], x['spacy_offsets'])
-		if(debugATNLPkeypoints):
-			print("kp_indices_batch = ", kp_indices_batch)
+		
+		if(not ATNLPcompareUntransformedTokenPrediction):
+			kp_indices_batch, kp_meta_batch, kp_prev_level_used_batch = ATNLPpt_keypoints.build_keypoints(l, x['spacy_input_ids'], x['spacy_pos'], x['spacy_tag'], x['spacy_text'], x['spacy_offsets'])
+			if(debugATNLPkeypoints):
+				print("kp_indices_batch = ", kp_indices_batch)
 			
 		if(l == 0):
 			seq_input = self.generateSequenceInput(x)
@@ -172,7 +182,6 @@ class ATNLPmodel(nn.Module):
 			# -----------------------------
 			seq_input_encoded = ATNLPpt_ATNLPmodelContinuousVarEncoding.encodeContinuousVarsAsBits(self, seq_input, ATNLPcontinuousVarEncodingNumBits).float()	#NLPcharacterInputSetLen	#[batchSize, sequenceLength*numBits]
 			seq_input_encoded = seq_input_encoded.reshape(B1, L1, C)	 #shape (B1, L1, C)
-			seq_input_encoded = seq_input_encoded.permute(0, 2, 1)	 #shape (B1, C, L1)
 			
 		numSubsamplesWithKeypoints = 0
 		accuracyAllWindows = 0.0
@@ -181,24 +190,26 @@ class ATNLPmodel(nn.Module):
 			if(debugSequentialLoops):
 				print("\n\tslidingWindowIndex = ", slidingWindowIndex)
 
-			# -----------------------------
-			# Transformation (normalisation)
-			# -----------------------------
-			if(ATNLPusePredictionHead):
-				last_token_idx = contextSizeMax
-				Rcurr, Qcurr, L2curr = R[l], Q[l], L2[l]
-			else:
-				last_token_idx = slidingWindowIndex
-				Rcurr, Qcurr, L2curr = R, Q, L2
-				
-			if(l==0):
-				foundKeypointPairs, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid, src_ids = ATNLPpt_keypoints.generate_keypoint_pairs(B1, Rcurr, Qcurr, keypointMode, device, x["spacy_offsets"], last_token_idx, kp_indices_batch, kp_meta_batch)
-			else:
-				normalisedSequencePrevLevel = self.predictionModel[l].generateNormalisedSequence(normalisedSnapshotsPrevLevel, supportSequenceLevelPrediction=False)	 #shape (B1prev*Qprev, Rprev*L2prev, C)	#do not format transform_batch input for sequence level prediction 
-				foundKeypointPairs, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid, src_ids = ATNLPpt_keypoints.generate_keypoint_pairs_from_prev_level(l, keypointMode, device, normalisedSequencePrevLevel, kp_prev_level_used_batch)
-				seq_input_encoded = normalisedSequencePrevLevel.permute(0, 2, 1)	 #shape (B1prev*Qprev, C, Rprev*L2prev)
+			if(not ATNLPcompareUntransformedTokenPrediction):
+				# -----------------------------
+				# Transformation (normalisation)
+				# -----------------------------
+				if(ATNLPusePredictionHead):
+					last_token_idx = contextSizeMax
+					Rcurr, Qcurr, L2curr = R[l], Q[l], L2[l]
+				else:
+					last_token_idx = slidingWindowIndex
+					Rcurr, Qcurr, L2curr = R, Q, L2
 
-			normalisedSnapshots, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid = ATNLPpt_transformation.transform_batch(seq_input_encoded, Rcurr, Qcurr, L2curr, foundKeypointPairs, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid, src_ids)
+				if(l==0):
+					seq_input_encoded_reshaped = seq_input_encoded.permute(0, 2, 1)	 #shape (B1, C, L1)
+					foundKeypointPairs, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid, src_ids = ATNLPpt_keypoints.generate_keypoint_pairs(B1, Rcurr, Qcurr, keypointMode, device, x["spacy_offsets"], last_token_idx, kp_indices_batch, kp_meta_batch)
+				else:
+					normalisedSequencePrevLevel = self.predictionModel[l].generateNormalisedSequence(normalisedSnapshotsPrevLevel, supportSequenceLevelPrediction=False)	 #shape (B1prev*Qprev, Rprev*L2prev, C)	#do not format transform_batch input for sequence level prediction 
+					foundKeypointPairs, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid, src_ids = ATNLPpt_keypoints.generate_keypoint_pairs_from_prev_level(l, keypointMode, device, normalisedSequencePrevLevel, kp_prev_level_used_batch)
+					seq_input_encoded_reshaped = normalisedSequencePrevLevel.permute(0, 2, 1)	 #shape (B1prev*Qprev, C, Rprev*L2prev)
+
+				normalisedSnapshots, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid = ATNLPpt_transformation.transform_batch(seq_input_encoded_reshaped, Rcurr, Qcurr, L2curr, foundKeypointPairs, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid, src_ids)
 
 			if(debugATNLPnormalisation):
 				print("seq_input_encoded = ", seq_input_encoded)	
@@ -209,29 +220,35 @@ class ATNLPmodel(nn.Module):
 			# Train/Prediction
 			# -----------------------------	
 			if(ATNLPusePredictionHead):
-				B1curr = normalisedSnapshots.shape[0]	#(B1,S,C,L2)
-				normalisedSnapshots = normalisedSnapshots.reshape(B1curr, R[l], Q[l], C, L2[l])	#reshape to (B1, R, Q, C, L2)
-				normalisedSnapshots = normalisedSnapshots.permute(0, 2, 1, 4, 3)	#(B1, Q, R, L2, C)
-				
-				if(self.detectValidNormalisedSnapshot(normalisedSnapshots)):
+				if(ATNLPcompareUntransformedTokenPrediction):
+					normalisedSequence = seq_input_encoded	#shape (B1, L1, C)
 					numSubsamplesWithKeypoints += 1
+					normalisedSnapshots = None
 				else:
-					continue
+					B1curr = normalisedSnapshots.shape[0]	#(B1,S,C,L2)
+					normalisedSnapshots = normalisedSnapshots.reshape(B1curr, R[l], Q[l], C, L2[l])	#reshape to (B1, R, Q, C, L2)
+					normalisedSnapshots = normalisedSnapshots.permute(0, 2, 1, 4, 3)	#(B1, Q, R, L2, C)
+				
+					if(self.detectValidNormalisedSnapshot(normalisedSnapshots)):
+						numSubsamplesWithKeypoints += 1
+					else:
+						continue
 
-				normalisedSequence = self.predictionModel[l].generateNormalisedSequence(normalisedSnapshots)	#transformer/wavenet: (B1*Q, R*L2, C)
+					normalisedSequence = self.generateNormalisedSequence(normalisedSnapshots)	#transformer/wavenet: (B1*Q, R*L2, C)
+					
 				y = self.generateClassTargetsAll(normalisedSequence)
 				
 				if(trainOrTest):
 					with torch.enable_grad():
 						self.predictionModel[l].train()
-						logits = self.predictionModel[l](normalisedSnapshots)
+						logits = self.predictionModel[l](normalisedSequence)
 						loss = ATNLPpt_prediction.loss_function(logits, y)
 						optim.zero_grad()
 						loss.backward()
 						optim.step()
 				else:
 					self.predictionModel[l].eval()
-					logits = self.predictionModel[l](normalisedSnapshots)
+					logits = self.predictionModel[l](normalisedSequence)
 					loss = ATNLPpt_prediction.loss_function(logits, y)
 				matches = ATNLPpt_prediction.calculate_matches(logits, y)
 				loss = loss.item()
@@ -436,6 +453,16 @@ class ATNLPmodel(nn.Module):
 							self.normalisedSnapshot_list[referenceSetDelimiterID][s].append(normalisedSnapshot)
 							self.classTarget_list[referenceSetDelimiterID][s].append(classTarget)
 
+	def generateNormalisedSequence(self, x, supportSequenceLevelPrediction=True):
+		B1, Q, R, L2, C = x.shape
+		if backboneType == "transformer" or backboneType == "wavenet":
+			#no sliding window (generate predictions for each token)
+			if(ATNLPuseSequenceLevelPrediction and supportSequenceLevelPrediction):
+				x = x.reshape(B1*Q, R, L2*C)                        # (B1*Q, R, L2*C)
+			else:
+				x = x.reshape(B1*Q, R*L2, C)                        # (B1*Q, R*L2, C)
+		return x
+	
 	def generateClassTargetsAll(self, normalisedSequence):
 		#normalisedSequence: (B1*Q, R*L2, C)
 		#FUTURE: create decoder to predict individual bert/character tokens rather than normalised snapshot interpolated bert tokens

@@ -225,26 +225,13 @@ class DenseSnapshotModel(nn.Module):
 			self.decoder = DenseSnapshotDecoder(d_input, d_model)
 		else:
 			printe("Unknown backbone {backbone}")
-
-	
-	def generateNormalisedSequence(self, x, supportSequenceLevelPrediction=True):
-		B1, Q, R, L2, C = x.shape
-		if self.backbone_type == "transformer" or self.backbone_type == "wavenet":
-			#no sliding window (generate predictions for each token)
-			if(ATNLPuseSequenceLevelPrediction and supportSequenceLevelPrediction):
-				x = x.reshape(B1*Q, R, L2*C)                        # (B1*Q, R, L2*C)
-			else:
-				x = x.reshape(B1*Q, R*L2, C)                        # (B1*Q, R*L2, C)
-		return x
 		
 	def forward(self, x: torch.Tensor, trainOrTest: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
 		"""Return `(logits, fused_rep)`.
 
-		* **x** - (B1,Q,R,L2,C)
+		* **x** - (B1*Q,R*L2,C)
 		*	**logits** - (B1*Q, R*L2-1, C) one prediction for each token
 		"""
-		B1, Q, R, L2, C = x.shape
-		x = self.generateNormalisedSequence(x)	#transformer/wavenet: (B1*Q, R*L2, C)
 		x = self.encoder(x)				# (B1*Q,R*L2,d)
 		enc = self.backbone(x)	#transformer/wavenet: (B1*Q, R*L2, d)
 		logits = self.decoder(x)	#transformer/wavenet: (B1*Q, R*L2, C)

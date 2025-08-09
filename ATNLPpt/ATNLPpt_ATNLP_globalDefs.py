@@ -47,15 +47,21 @@ paragraphCharDelimiterTypes = ["\n"]
 
 ATNLPusePredictionHead = True	#use ML model (transformer/wavenet) as a next token prediction head
 if(ATNLPusePredictionHead):
-	ATNLPuseMultiLevelTokenPrediction = False	#optional	#predicts char/subword (bert), subsentence (reference set), sentence, paragraph tokens
-	if(ATNLPuseMultiLevelTokenPrediction):
-		ATNLPmultiLevels = 3
-		ATNLPmultiLevelTokensDelimiterNames = ['pos', 'eos', 'eop']
-		ATNLPmultiLevelTokensDelimiterTypes = ['pos', 'char', 'char']
-		ATNLPmultiLevelTokens = ['referenceSets', 'sentences', 'paragraphs']	#if !ATNLPuseSequenceLevelPrediction, prediction targets = ['subwords', 'referenceSets', 'sentences']; or if ATNLPuseSequenceLevelPrediction: prediction targets = ['referenceSets', 'sentences', 'paragraphs']
-		ATNLPmultiLevelTokensDelimiters = [referenceSetPosDelimiterTypes, sentenceCharDelimiterTypes, paragraphCharDelimiterTypes]
-	else:
+	ATNLPcompareUntransformedTokenPrediction = False	#default: False	#train a predictive network with untransformed token prediction (ie standard transformer implementation)	#dev only
+	if(ATNLPcompareUntransformedTokenPrediction):
+		ATNLPuseMultiLevelTokenPrediction = False  #mandatory: False
 		ATNLPmultiLevels = 1
+	else:
+		ATNLPmultiLevelOnlyPredictLastLevel = False	#default: False	#only perform prediction across last level of token generation
+		ATNLPuseMultiLevelTokenPrediction = False	#optional	#predicts char/subword (bert), subsentence (reference set), sentence, paragraph tokens
+		if(ATNLPuseMultiLevelTokenPrediction):
+			ATNLPmultiLevels = 3
+			ATNLPmultiLevelTokensDelimiterNames = ['pos', 'eos', 'eop']
+			ATNLPmultiLevelTokensDelimiterTypes = ['pos', 'char', 'char']
+			ATNLPmultiLevelTokens = ['referenceSets', 'sentences', 'paragraphs']	#if !ATNLPuseSequenceLevelPrediction, prediction targets = ['subwords', 'referenceSets', 'sentences']; or if ATNLPuseSequenceLevelPrediction: prediction targets = ['referenceSets', 'sentences', 'paragraphs']
+			ATNLPmultiLevelTokensDelimiters = [referenceSetPosDelimiterTypes, sentenceCharDelimiterTypes, paragraphCharDelimiterTypes]
+		else:
+			ATNLPmultiLevels = 1
 	ATNLPuseSequenceLevelPrediction = False	#optional	#predicts sequences (eg reference sets) rather than normalised tokens	#if !ATNLPuseSequenceLevelPrediction, prediction target = 'subwords'; or if ATNLPuseSequenceLevelPrediction: prediction target = 'referenceSets'
 	backboneType = "transformer" #"transformer", "wavenet"
 	reorderPairsToBeNotReversed = True	#default: True - prediction head may expect ordered normalised snapshots as input 
@@ -73,7 +79,7 @@ else:
 	reorderPairsToBeNotReversed = False	#default: False (process last normalised snapshot first as this is special; it is only defined by 1 reference set delimiter keypoint)
 	useSlidingWindow = True		#mandatory
 trainLocal = True	#local learning rule	#required
-
+	
 ATNLPindexDatabaseByClassTarget = True	#optional	#overload normalised snapshots with same class target	#orig: False
 ATNLPindexDatabaseByReferenceSetIndex = True	#mandatory: True	#orig: False
 ATNLPindexDatabaseByReferenceSetDelimiterToken = True	#mandatory: True	#orig: False
