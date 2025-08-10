@@ -411,7 +411,7 @@ elif(useImageDataset):
 	dropoutProb = 0.5 	#default: 0.5	#orig: 0.3
 elif(useNLPDataset):
 	datasetSizeSubset = True	#default: True (required for stateTestDataset)  #if(useSequentialSANI): hiddenLayerSizeSANI is dynamically grown, and is not dependent on datasetSize (which can therefore be huge), however a) useDatasetSubset is still useful for fast training (development/debugging) and b) is required to reserve data for an eval phase 
-	datasetSizeSubsetName = "small"
+	datasetSizeSubsetName = "tiny"
 	if(datasetSizeSubsetName=="tiny"):
 		datasetTrainRows = 2	#must be > 1
 		datasetTestRows = 2	#must be > 1
@@ -431,11 +431,11 @@ elif(useNLPDataset):
 	elif(datasetSizeSubsetName=="large"):
 		datasetTrainRows = 10000		#default: 100000
 		datasetTestRows = int(datasetTrainRows*0.1) #[datasetTestSplitSize]
-		batchSize = 4	#default: 16	#orig: 256
+		batchSize = 16	#default: 16	#orig: 256
 	elif(datasetSizeSubsetName=="default"):
 		datasetTrainRows = 100000
 		datasetTestRows = int(datasetTrainRows*0.1) #[datasetTestSplitSize]
-		batchSize = 16
+		batchSize = 16	#16
 	numWorkers = 0	#default: 0	(required for stateTestDataset:datasetTestRows to be enforced) #orig = 2	#set numWorkers=1 for simplify dataset determinism during streaming (numWorkers=2 will alternate between selecting articles from wikipedia dataset shard N and shard N+1)
 	datasetName = "wikipedia"
 	datasetCfg = "20220301.en"	#not available in conda; "20231101.en", not available in huggingface; "20240501.en"

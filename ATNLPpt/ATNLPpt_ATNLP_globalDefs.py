@@ -27,6 +27,7 @@ debugATNLPnormalisation = False
 debugATNLPcomparison = False
 debugATNLPkeypoints = False
 debugSkipFirstBatch = False	#skips the first dataset batch (sample) where batchSize=1 for debug, as this contains very few keypoints at start of sequence
+debugATNLPcompareUntransformedTokenPrediction = False
 
 useNLPDataset = True	#mandatory
 useNLPDatasetPaddingMask = True	#default: True	#not strictly required for wikipedia dataset and small sequence lengths, as it extracts only the first L tokens from each article
@@ -49,18 +50,21 @@ ATNLPusePredictionHead = True	#use ML model (transformer/wavenet) as a next toke
 if(ATNLPusePredictionHead):
 	ATNLPcompareUntransformedTokenPrediction = False	#default: False	#train a predictive network with untransformed token prediction (ie standard transformer implementation)	#dev only
 	if(ATNLPcompareUntransformedTokenPrediction):
-		ATNLPuseMultiLevelTokenPrediction = False  #mandatory: False
+		debugATNLPcompareUntransformedTokenPrediction = False	#generateSequenceInput does not expand bert tokens to characters
+		ATNLPuseMultiLevelTokenPrediction = False
+		ATNLPmultiLevelOnlyPredictLastLevel = False
 		ATNLPmultiLevels = 1
 	else:
-		ATNLPmultiLevelOnlyPredictLastLevel = False	#default: False	#only perform prediction across last level of token generation
-		ATNLPuseMultiLevelTokenPrediction = False	#optional	#predicts char/subword (bert), subsentence (reference set), sentence, paragraph tokens
+		ATNLPuseMultiLevelTokenPrediction = True	#optional	#predicts char/subword (bert), subsentence (reference set), sentence, paragraph tokens
 		if(ATNLPuseMultiLevelTokenPrediction):
+			ATNLPmultiLevelOnlyPredictLastLevel = False	#default: False	#only perform prediction across last level of token generation
 			ATNLPmultiLevels = 3
 			ATNLPmultiLevelTokensDelimiterNames = ['pos', 'eos', 'eop']
 			ATNLPmultiLevelTokensDelimiterTypes = ['pos', 'char', 'char']
 			ATNLPmultiLevelTokens = ['referenceSets', 'sentences', 'paragraphs']	#if !ATNLPuseSequenceLevelPrediction, prediction targets = ['subwords', 'referenceSets', 'sentences']; or if ATNLPuseSequenceLevelPrediction: prediction targets = ['referenceSets', 'sentences', 'paragraphs']
 			ATNLPmultiLevelTokensDelimiters = [referenceSetPosDelimiterTypes, sentenceCharDelimiterTypes, paragraphCharDelimiterTypes]
 		else:
+			ATNLPmultiLevelOnlyPredictLastLevel = False
 			ATNLPmultiLevels = 1
 	ATNLPuseSequenceLevelPrediction = False	#optional	#predicts sequences (eg reference sets) rather than normalised tokens	#if !ATNLPuseSequenceLevelPrediction, prediction target = 'subwords'; or if ATNLPuseSequenceLevelPrediction: prediction target = 'referenceSets'
 	backboneType = "transformer" #"transformer", "wavenet"
@@ -129,7 +133,25 @@ deviceSparse = ATNLPsnapshotDatabaseLoadDevice
 bertModelName = "bert-base-uncased"	#bertModelName = "bert-large-uncased"
 bertNumberTokenTypes = 30522	#tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")	print(len(tokenizer))
 
-useNLPcharacterInput = False
+useNLPcharacterInput = False		#default: False, recommended for ATNLPcompareUntransformedTokenPrediction (discrete token prediction comparison)
+
+useNLPDatasetMultipleTokenisation = True	#mandatory: True	#required for spacy tokenisation
+if(useNLPDatasetMultipleTokenisation):
+	useNLPDatasetMultipleTokenisationSpacy = True	#mandatory: True
+	if(useNLPcharacterInput):
+		useNLPDatasetMultipleTokenisationChar = True	#mandatory: True
+		useNLPDatasetMultipleTokenisationBert = False	#optional
+	else:
+		useNLPDatasetMultipleTokenisationChar = False	#optional
+		useNLPDatasetMultipleTokenisationBert = True	#mandatory: True
+	if(useNLPDatasetMultipleTokenisationChar): 
+		useNLPcharacterInputBasic = True	#if True: only use a basic lowercase+punctuation character set of 30 chars, else if False: use a full printable subset of ASCII-128
+		if(useNLPcharacterInputBasic):
+			NLPcharacterInputBasicSet = [' ', 'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','Q','R','s','t','u','v','w','x','y','z','.','(',')', ',']	#select 31 characters for normalcy
+			NLPcharacterInputSetLen = len(NLPcharacterInputBasicSet)+1	#32	# 0 reserved for PAD (NLPpadTokenID)
+		else:
+			NLPcharacterInputSetLen = 98	  # full printable subset of ASCII-128	# 0 reserved for PAD (NLPpadTokenID)
+
 if(useNLPcharacterInput):
 	useContinuousVarEncodeMethod = "onehot"	#just convert character id directly to onehot vector
 	useTokenEmbedding = False	#token embeddings are not used (one-hot vectors instead)
@@ -138,7 +160,10 @@ else:
 	useContinuousVarEncodeMethod = "onehot"
 	useTokenEmbedding = False	#token embeddings are not used (one-hot vectors instead)
 	ATNLPcontinuousVarEncodingNumBits = bertNumberTokenTypes
-contextSizeMax = 128*4	#default: 512	#production: 512*4	#specified in characters	#assume approx 4 characters per BERT token
+if(useNLPcharacterInput):
+	contextSizeMax = 512*4	#default: 2048	#useNLPcharacterInput requires less memory
+else:
+	contextSizeMax = 128*4	#default: 512	#production: 512*4	#specified in characters	#assume approx 4 characters per BERT token
 contextSizeMaxCharacters = contextSizeMax	
 contextSizeMaxBertTokens = contextSizeMax//2	#safe only (max)	#average: //4	- wikipedia average token length
 contextSizeMaxSpacyTokens = contextSizeMax//4	#safe only (max)	#average: //6	- wikipedia average word length
@@ -155,7 +180,10 @@ inputDataNames = ["char_input_ids", "bert_input_ids", "bert_offsets", "spacy_inp
 C = ATNLPcontinuousVarEncodingNumBits	#vocabulary size
 
 #sequence length vars;
-L1 = sequenceLength
+if(debugATNLPcompareUntransformedTokenPrediction):
+	L1 = contextSizeMaxBertTokens
+else:
+	L1 = sequenceLength
 
 #keypoint extraction vars;
 keypointModes = Literal["allKeypointCombinations", "firstKeypointConsecutivePairs", "firstKeypointPairs"]
@@ -165,6 +193,11 @@ if(ATNLPusePredictionHead):
 		R[l] = 5*(ATNLPmultiLevels-l)	#default: 10	#the last R (user defined) set of 2 consecutive keypoints in batch sequence	#max number of reference sets in batch sequence (if less reference sets detected in sequence some normalised snapshots will be filled with zeros)
 		Q[l] = 1	#the last R (user defined) set of 2 keypoints (of distance Q) in batch sequence
 		L2[l] = 8	#default: 8	#normalisation length for each reference set
+	if(ATNLPuseMultiLevelTokenPrediction and ATNLPmultiLevelOnlyPredictLastLevel):
+		#assume contextSizeMax = 128*4	#default: 512 
+		L2[0] = 8*4	#assume approx 4 characters per BERT token	#~8*4 characters per reference set
+		L2[1] = 8	#~8 reference sets per sentence
+		L2[2] = 8	#~8 sentences per paragraph
 else:
 	R = 3	#the last R (user defined) set of 2 consecutive keypoints in batch sequence
 	Q = 1   #the last R (user defined) set of 2 keypoints (of distance Q) in batch sequence
@@ -196,23 +229,6 @@ if(not ATNLPusePredictionHead):
 	#def getS(R, Q):
 	#return S
 		
-useNLPDatasetMultipleTokenisation = True	#mandatory: True	#required for spacy tokenisation
-if(useNLPDatasetMultipleTokenisation):
-	useNLPDatasetMultipleTokenisationSpacy = True	#mandatory: True
-	if(useNLPcharacterInput):
-		useNLPDatasetMultipleTokenisationChar = True	#mandatory: True
-		useNLPDatasetMultipleTokenisationBert = False	#optional
-	else:
-		useNLPDatasetMultipleTokenisationChar = False	#optional
-		useNLPDatasetMultipleTokenisationBert = True	#mandatory: True
-	if(useNLPDatasetMultipleTokenisationChar): 
-		useNLPcharacterInputBasic = True	#if True: only use a basic lowercase+punctuation character set of 30 chars, else if False: use a full printable subset of ASCII-128
-		if(useNLPcharacterInputBasic):
-			NLPcharacterInputBasicSet = [' ', 'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','Q','R','s','t','u','v','w','x','y','z','.','(',')', ',']	#select 31 characters for normalcy
-			NLPcharacterInputSetLen = len(NLPcharacterInputBasicSet)+1	#32	# 0 reserved for PAD (NLPpadTokenID)
-		else:
-			NLPcharacterInputSetLen = 98	  # full printable subset of ASCII-128	# 0 reserved for PAD (NLPpadTokenID)
-
 #sublayer paramters:	
 simulatedDendriticBranches = False	#optional	#performTopK selection of neurons based on local inhibition - equivalent to multiple independent fully connected weights per neuron (SDBANN)
 useLinearSublayers = False

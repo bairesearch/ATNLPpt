@@ -205,7 +205,7 @@ class ATNLPmodel(nn.Module):
 					seq_input_encoded_reshaped = seq_input_encoded.permute(0, 2, 1)	 #shape (B1, C, L1)
 					foundKeypointPairs, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid, src_ids = ATNLPpt_keypoints.generate_keypoint_pairs(B1, Rcurr, Qcurr, keypointMode, device, x["spacy_offsets"], last_token_idx, kp_indices_batch, kp_meta_batch)
 				else:
-					normalisedSequencePrevLevel = self.predictionModel[l].generateNormalisedSequence(normalisedSnapshotsPrevLevel, supportSequenceLevelPrediction=False)	 #shape (B1prev*Qprev, Rprev*L2prev, C)	#do not format transform_batch input for sequence level prediction 
+					normalisedSequencePrevLevel = self.generateNormalisedSequence(normalisedSnapshotsPrevLevel, supportSequenceLevelPrediction=False)	 #shape (B1prev*Qprev, Rprev*L2prev, C)	#do not format transform_batch input for sequence level prediction 
 					foundKeypointPairs, keypointPairsIndices, keypointPairsCharIdx, keypointPairsValid, src_ids = ATNLPpt_keypoints.generate_keypoint_pairs_from_prev_level(l, keypointMode, device, normalisedSequencePrevLevel, kp_prev_level_used_batch)
 					seq_input_encoded_reshaped = normalisedSequencePrevLevel.permute(0, 2, 1)	 #shape (B1prev*Qprev, C, Rprev*L2prev)
 
@@ -503,39 +503,42 @@ class ATNLPmodel(nn.Module):
 		if(useNLPcharacterInput):
 			seq_input = x['char_input_ids'].to(device)	# Tensor [batchSize, sequenceLength]
 		else:
-			"""
-			Expand word-piece IDs so every character position gets the ID of the token that covers it.
+			if(debugATNLPcompareUntransformedTokenPrediction):
+				seq_input = x['bert_input_ids'].to(device)	# Tensor [batchSize, sequenceLength]
+			else:
+				"""
+				Expand word-piece IDs so every character position gets the ID of the token that covers it.
 
-			Returns
-				ids_per_char : (B, Lc)  int64
-			"""
+				Returns
+					ids_per_char : (B, Lc)  int64
+				"""
 
-			bert_input_ids = x['bert_input_ids'].to(device)	# (B, Lb)	 int64
-			bert_offsets = x['bert_offsets'].to(device)	#(B, Lb, 2)  int64
-			Lc = contextSizeMax
-			pad_id = NLPpadTokenID
+				bert_input_ids = x['bert_input_ids'].to(device)	# (B, Lb)	 int64
+				bert_offsets = x['bert_offsets'].to(device)	#(B, Lb, 2)  int64
+				Lc = contextSizeMax
+				pad_id = NLPpadTokenID
 
-			# ------------------------------------------------------------------
-			B, Lb = bert_input_ids.shape
+				# ------------------------------------------------------------------
+				B, Lb = bert_input_ids.shape
 
-			# 1) Boolean mask saying \u201ctoken j covers char position c\u201d
-			pos = pt.arange(Lc, device=device).view(1, Lc, 1)	  # (1,Lc,1)
-			start, end = bert_offsets[..., 0], bert_offsets[..., 1]	   # (B,Lb)
-			mask = (pos >= start.unsqueeze(1)) & (pos < end.unsqueeze(1))  # (B,Lc,Lb)
+				# 1) Boolean mask saying \u201ctoken j covers char position c\u201d
+				pos = pt.arange(Lc, device=device).view(1, Lc, 1)	  # (1,Lc,1)
+				start, end = bert_offsets[..., 0], bert_offsets[..., 1]	   # (B,Lb)
+				mask = (pos >= start.unsqueeze(1)) & (pos < end.unsqueeze(1))  # (B,Lc,Lb)
 
-			# zero-length spans (CLS/SEP/PAD) have end==start \u2192 never True
-			# ------------------------------------------------------------------
-			# 2) For each character pick the first (and only) covering token
-			token_idx = mask.float().argmax(dim=2)					   # (B,Lc), int64
+				# zero-length spans (CLS/SEP/PAD) have end==start \u2192 never True
+				# ------------------------------------------------------------------
+				# 2) For each character pick the first (and only) covering token
+				token_idx = mask.float().argmax(dim=2)					   # (B,Lc), int64
 
-			# 3) Detect char positions not covered by any token
-			no_cover = ~mask.any(dim=2)								 # (B,Lc)
-			token_idx[no_cover] = 0										  # safe filler
+				# 3) Detect char positions not covered by any token
+				no_cover = ~mask.any(dim=2)								 # (B,Lc)
+				token_idx[no_cover] = 0										  # safe filler
 
-			# 4) Gather the BERT IDs and pad the gaps
-			ids_per_char = bert_input_ids.gather(1, token_idx)			  # (B,Lc)
-			ids_per_char[no_cover] = pad_id
-			seq_input = ids_per_char
+				# 4) Gather the BERT IDs and pad the gaps
+				ids_per_char = bert_input_ids.gather(1, token_idx)			  # (B,Lc)
+				ids_per_char[no_cover] = pad_id
+				seq_input = ids_per_char
 		return seq_input
 
 

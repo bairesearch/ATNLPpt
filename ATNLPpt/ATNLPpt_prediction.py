@@ -99,7 +99,7 @@ class TransformerBackbone(nn.Module):
 	Includes learnable positional embeddings along the R axis.
 	"""
 
-	def __init__(self, d_in: int, nhead: int = 8, nlayers: int = 4, max_R: int = 1024, causal: bool = True):
+	def __init__(self, d_in: int, nhead: int = 8, nlayers: int = 6, max_R: int = contextSizeMax, causal: bool = True):
 		super().__init__()
 		self.pos_emb = nn.Embedding(max_R, d_in)
 		enc_layer = nn.TransformerEncoderLayer(d_model=d_in, nhead=nhead, dim_feedforward=4 * d_in, batch_first=True)
