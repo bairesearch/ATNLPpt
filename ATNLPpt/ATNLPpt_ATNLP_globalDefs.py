@@ -19,7 +19,7 @@ ATNLPpt globalDefs
 
 import math
 from typing import Literal
-			
+
 printATNLPmodelProperties = True
 
 debugSequentialLoops = False
@@ -82,6 +82,7 @@ else:
 	useCustomLearningAlgorithm = True	#mandatory (disable all backprop optimisers)
 	reorderPairsToBeNotReversed = False	#default: False (process last normalised snapshot first as this is special; it is only defined by 1 reference set delimiter keypoint)
 	useSlidingWindow = True		#mandatory
+	ATNLPcompareUntransformedTokenPrediction = False
 trainLocal = True	#local learning rule	#required
 	
 ATNLPindexDatabaseByClassTarget = True	#optional	#overload normalised snapshots with same class target	#orig: False
@@ -133,11 +134,16 @@ deviceSparse = ATNLPsnapshotDatabaseLoadDevice
 bertModelName = "bert-base-uncased"	#bertModelName = "bert-large-uncased"
 bertNumberTokenTypes = 30522	#tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")	print(len(tokenizer))
 
-useNLPcharacterInput = False		#default: False, recommended for ATNLPcompareUntransformedTokenPrediction (discrete token prediction comparison)
-
+useNLPcharacterInput = True		#default: False, recommended for ATNLPcompareUntransformedTokenPrediction (discrete token prediction comparison)
+if(debugATNLPcompareUntransformedTokenPrediction):
+	useNLPcharacterInput = False
+	
 useNLPDatasetMultipleTokenisation = True	#mandatory: True	#required for spacy tokenisation
 if(useNLPDatasetMultipleTokenisation):
-	useNLPDatasetMultipleTokenisationSpacy = True	#mandatory: True
+	if(ATNLPcompareUntransformedTokenPrediction):
+		useNLPDatasetMultipleTokenisationSpacy = False
+	else:
+		useNLPDatasetMultipleTokenisationSpacy = True
 	if(useNLPcharacterInput):
 		useNLPDatasetMultipleTokenisationChar = True	#mandatory: True
 		useNLPDatasetMultipleTokenisationBert = False	#optional

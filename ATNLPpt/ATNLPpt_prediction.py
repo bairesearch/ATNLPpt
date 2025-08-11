@@ -250,11 +250,11 @@ def loss_function(logits: torch.Tensor, targets: torch.Tensor):
 	
 def calculate_matches(logits: torch.Tensor, targets: torch.Tensor) -> float:
 	"""Compute bool top-1 accuracy (1/0) for each sample in mini-batch."""
-	#print("logits.shape = ", logits.shape)
-	#print("targets.shape = ", targets.shape)
 	if(useSlidingWindow):
 		preds = logits.argmax(dim=-1)	#compare a single target
 	else:
-		preds = logits	#compare a distribution of targets across C (normalised snapshot tokens contain a distribution of bert tokens, not a single bert token)
+		#preds = logits	#compare a distribution of targets across C (normalised snapshot tokens contain a distribution of bert tokens, not a single bert token)
+		preds = logits.argmax(dim=-1)	#compare a single target
+		targets = targets.argmax(dim=-1)	#compare a single target
 	matches = (preds == targets)
-	return matches
+	return matches, targets

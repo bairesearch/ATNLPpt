@@ -250,7 +250,10 @@ class ATNLPmodel(nn.Module):
 					self.predictionModel[l].eval()
 					logits = self.predictionModel[l](normalisedSequence)
 					loss = ATNLPpt_prediction.loss_function(logits, y)
-				matches = ATNLPpt_prediction.calculate_matches(logits, y)
+				matches, y = ATNLPpt_prediction.calculate_matches(logits, y)
+				#print("y = ", y)
+				#print("logits = ", logits)
+				#print("matches = ", matches)
 				loss = loss.item()
 				comparisonFound = True
 			else:
