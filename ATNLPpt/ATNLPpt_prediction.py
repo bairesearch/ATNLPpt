@@ -45,6 +45,7 @@ The model outputs one next-token prediction per element of the **B1** axis.
 
 Revision history
 ----------------
+* **v0.9**(2025-08-11) -- update loss_function/calculate_matches
 * **v0.8**(2025-08-01) -- add option ATNLPuseSequenceLevelPrediction: use input shape (B1*Q, R, L2*d)
 * **v0.7**(2025-07-23) -- *Layout change:* input is now `(B1,Q,R,L2,C), change TransformerBackbone to use input of shape (B1*Q, R*L2, d), add WaveNetBackbone
 * **v0.6**(2025-07-22) -- *Layout change:* input is now `(B1,R,Q,L2,C)
@@ -234,7 +235,7 @@ class DenseSnapshotModel(nn.Module):
 		"""
 		x = self.encoder(x)				# (B1*Q,R*L2,d)
 		enc = self.backbone(x)	#transformer/wavenet: (B1*Q, R*L2, d)
-		logits = self.decoder(x)	#transformer/wavenet: (B1*Q, R*L2, C)
+		logits = self.decoder(enc)	#transformer/wavenet: (B1*Q, R*L2, C)
 
 		return logits
 
@@ -245,7 +246,13 @@ class DenseSnapshotModel(nn.Module):
 def loss_function(logits: torch.Tensor, targets: torch.Tensor):
 	#print("logits.shape = ", logits.shape)
 	#print("targets.shape = ", targets.shape)
-	loss = F.cross_entropy(logits, targets)
+	if(ATNLPcompareUntransformedTokenPredictionStrict):
+		"""Cross-entropy loss over flattened B1*L dimension."""
+		logits = logits.view(-1, logits.size(-1))
+		targets = targets.argmax(dim=-1).view(-1)	#remove one-hot distribution
+		loss = F.cross_entropy(logits, targets)
+	else:
+		loss = softCrossEntropyUnnormalized(logits, targets)	#CHECKTHIS: assume token distribution at l in [B, L, C] are unnormalised (across C)
 	return loss
 	
 def calculate_matches(logits: torch.Tensor, targets: torch.Tensor) -> float:
@@ -255,6 +262,49 @@ def calculate_matches(logits: torch.Tensor, targets: torch.Tensor) -> float:
 	else:
 		#preds = logits	#compare a distribution of targets across C (normalised snapshot tokens contain a distribution of bert tokens, not a single bert token)
 		preds = logits.argmax(dim=-1)	#compare a single target
-		targets = targets.argmax(dim=-1)	#compare a single target
-	matches = (preds == targets)
-	return matches, targets
+		targets = targets.argmax(dim=-1)	#compare a single target	#calculate top-1 accuracy
+	valid_mask = (targets != NLPpadTokenID)	#redundant (performed by calculateAccuracy)
+	matches = (preds == targets) & valid_mask
+	return matches
+
+def softCrossEntropyNormalized(
+	logits: torch.Tensor,			# (B, L, C)
+	targets: torch.Tensor,			# (B, L, C), rows sum to ~1
+	eps: float = 1e-12
+) -> torch.Tensor:
+	"""
+	Soft-label CE for mutually exclusive classes.
+	Masking rule: position is masked iff argmax(targets[b,l]) == NLPpadTokenID.
+	"""
+	logp = F.log_softmax(logits, dim=-1)						# (B, L, C)
+	tokenLoss = -(targets * logp).sum(dim=-1)					# (B, L)
+
+	padMask = (targets.argmax(dim=-1) == NLPpadTokenID)		# (B, L) bool
+	weights = (~padMask).to(dtype=logits.dtype)
+
+	return (tokenLoss * weights).sum() / weights.sum().clamp_min(eps)
+
+def softCrossEntropyUnnormalized(
+	logits: torch.Tensor,			# (B, L, C)
+	targets: torch.Tensor,			# (B, L, C), non-neg; rows may not sum to 1
+	preserveMass: bool = False,
+	eps: float = 1e-12
+) -> torch.Tensor:
+	"""
+	Soft-label CE for mutually exclusive classes with unnormalized targets.
+	We renormalize per (B,L) across C. Masking uses only argmax==NLPpadTokenID.
+	"""
+	p = targets.clamp_min(0.0)
+	mass = p.sum(dim=-1, keepdim=True)							# (B, L, 1)
+	pNorm = p / mass.clamp_min(eps)								# (B, L, C)
+
+	logp = F.log_softmax(logits, dim=-1)
+	tokenLoss = -(pNorm * logp).sum(dim=-1)						# (B, L)
+
+	baseWeights = mass.squeeze(-1).to(dtype=logits.dtype) if preserveMass \
+		else torch.ones_like(tokenLoss, dtype=logits.dtype)
+
+	padMask = (targets.argmax(dim=-1) == NLPpadTokenID)		# (B, L) bool
+	weights = baseWeights * (~padMask).to(dtype=logits.dtype)
+
+	return (tokenLoss * weights).sum() / weights.sum().clamp_min(eps)

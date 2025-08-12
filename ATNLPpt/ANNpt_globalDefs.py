@@ -432,13 +432,24 @@ elif(useNLPDataset):
 		datasetTrainRows = 10000		#default: 100000
 		datasetTestRows = int(datasetTrainRows*0.1) #[datasetTestSplitSize]
 		batchSize = 16	#default: 16	#orig: 256
-	elif(datasetSizeSubsetName=="default"):
+	elif(datasetSizeSubsetName=="verylarge"):
 		datasetTrainRows = 100000
 		datasetTestRows = int(datasetTrainRows*0.1) #[datasetTestSplitSize]
 		batchSize = 32	#16
+	elif(datasetSizeSubsetName=="default"):
+		datasetTrainRows = 1000000
+		datasetTestRows = int(datasetTrainRows*0.01) #[datasetTestSplitSize]
+		if(useCloudExecution):
+			batchSize = 64
+		else:
+			batchSize = 16	#16
 	numWorkers = 0	#default: 0	(required for stateTestDataset:datasetTestRows to be enforced) #orig = 2	#set numWorkers=1 for simplify dataset determinism during streaming (numWorkers=2 will alternate between selecting articles from wikipedia dataset shard N and shard N+1)
-	datasetName = "wikipedia"
-	datasetCfg = "20220301.en"	#not available in conda; "20231101.en", not available in huggingface; "20240501.en"
+	if(useCloudExecution):
+		datasetName = "wikimedia/wikipedia"
+		datasetCfg = "20231101.en"
+	else:
+		datasetName = "wikipedia"
+		datasetCfg = "20220301.en"	#not available in conda; "20231101.en", not available in huggingface; "20240501.en"
 	datasetHasTestSplit = False
 	trainNumberOfEpochs = 1	#default: 1	#with increased epochs can significantly increase train accuracy on train dataset (though should theoretically have no effect on test accuracy)
 	if(useAlgorithmATNLP):

@@ -250,7 +250,7 @@ class ATNLPmodel(nn.Module):
 					self.predictionModel[l].eval()
 					logits = self.predictionModel[l](normalisedSequence)
 					loss = ATNLPpt_prediction.loss_function(logits, y)
-				matches, y = ATNLPpt_prediction.calculate_matches(logits, y)
+				matches = ATNLPpt_prediction.calculate_matches(logits, y)
 				#print("y = ", y)
 				#print("logits = ", logits)
 				#print("matches = ", matches)
@@ -321,6 +321,7 @@ class ATNLPmodel(nn.Module):
 		# count how many are exactly correct
 		if(useNLPDatasetPaddingMask):
 			#print("y = ", y)
+			y = y.argmax(dim=-1)	#calculate top-1 accuracy
 			valid_mask = (y != NLPpadTokenID)
 			valid_count = valid_mask.sum().item()
 			if valid_count > 0:
@@ -506,7 +507,7 @@ class ATNLPmodel(nn.Module):
 		if(useNLPcharacterInput):
 			seq_input = x['char_input_ids'].to(device)	# Tensor [batchSize, sequenceLength]
 		else:
-			if(debugATNLPcompareUntransformedTokenPrediction):
+			if(ATNLPcompareUntransformedTokenPredictionStrict):
 				seq_input = x['bert_input_ids'].to(device)	# Tensor [batchSize, sequenceLength]
 			else:
 				"""

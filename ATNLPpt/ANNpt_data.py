@@ -653,7 +653,7 @@ elif(useNLPDataset):
 					texts,
 					truncation=True,
 					max_length=contextSizeMaxBertTokens,
-					padding=False,
+					padding=True,
 					return_offsets_mapping=True,
 				)
 				

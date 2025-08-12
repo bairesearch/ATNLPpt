@@ -27,13 +27,14 @@ debugATNLPnormalisation = False
 debugATNLPcomparison = False
 debugATNLPkeypoints = False
 debugSkipFirstBatch = False	#skips the first dataset batch (sample) where batchSize=1 for debug, as this contains very few keypoints at start of sequence
-debugATNLPcompareUntransformedTokenPrediction = False
 
 useNLPDataset = True	#mandatory
 useNLPDatasetPaddingMask = True	#default: True	#not strictly required for wikipedia dataset and small sequence lengths, as it extracts only the first L tokens from each article
 
 enforceConfigBatchSize = True	#required such that (B1 and) B2 can be determined at initialisation (not dynamic)
 debugOnlyPrintStreamedWikiArticleTitles = False
+
+ATNLPcompareUntransformedTokenPredictionStrict = False	#dependent var (initialisation only)
 
 import torch as pt
 if pt.cuda.is_available():
@@ -50,7 +51,7 @@ ATNLPusePredictionHead = True	#use ML model (transformer/wavenet) as a next toke
 if(ATNLPusePredictionHead):
 	ATNLPcompareUntransformedTokenPrediction = False	#default: False	#train a predictive network with untransformed token prediction (ie standard transformer implementation)	#dev only
 	if(ATNLPcompareUntransformedTokenPrediction):
-		debugATNLPcompareUntransformedTokenPrediction = False	#generateSequenceInput does not expand bert tokens to characters
+		ATNLPcompareUntransformedTokenPredictionStrict = True	#generateSequenceInput does not expand (bert) tokens to characters
 		ATNLPuseMultiLevelTokenPrediction = False
 		ATNLPmultiLevelOnlyPredictLastLevel = False
 		ATNLPmultiLevels = 1
@@ -135,8 +136,9 @@ bertModelName = "bert-base-uncased"	#bertModelName = "bert-large-uncased"
 bertNumberTokenTypes = 30522	#tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")	print(len(tokenizer))
 
 useNLPcharacterInput = True		#default: False, recommended for ATNLPcompareUntransformedTokenPrediction (discrete token prediction comparison)
-if(debugATNLPcompareUntransformedTokenPrediction):
-	useNLPcharacterInput = False
+if(useNLPcharacterInput):
+	if(ATNLPcompareUntransformedTokenPrediction):
+		 ATNLPcompareUntransformedTokenPredictionStrict = True	#char input never involves expansion to bert tokens
 	
 useNLPDatasetMultipleTokenisation = True	#mandatory: True	#required for spacy tokenisation
 if(useNLPDatasetMultipleTokenisation):
@@ -178,7 +180,7 @@ numberOfClasses = ATNLPcontinuousVarEncodingNumBits
 
 sequenceLength = contextSizeMax
 NLPpadTokenID = 0		#must be same as bert pad token id	#assert bert_tokenizer.pad_token_id == NLPpadTokenID
-NLPmaskTokenID = 103	#must be same as bert mask token id	#assert bert_tokenizer.mask_token_id == NLPmaskTokenID	#used to identify predicted tokens in normalised snapshot during predictive network training only (eg transformer)
+NLPmaskTokenID = 103	#must be same as bert mask token id	#assert bert_tokenizer.mask_token_id == NLPmaskTokenID	#used to identify predicted tokens in normalised snapshot during predictive network training only (eg transformer)	#not used
 
 inputDataNames = ["char_input_ids", "bert_input_ids", "bert_offsets", "spacy_input_ids", "spacy_pos", "spacy_tag", "spacy_offsets"]	
 
@@ -186,7 +188,7 @@ inputDataNames = ["char_input_ids", "bert_input_ids", "bert_offsets", "spacy_inp
 C = ATNLPcontinuousVarEncodingNumBits	#vocabulary size
 
 #sequence length vars;
-if(debugATNLPcompareUntransformedTokenPrediction):
+if(ATNLPcompareUntransformedTokenPredictionStrict and not useNLPcharacterInput):
 	L1 = contextSizeMaxBertTokens
 else:
 	L1 = sequenceLength
