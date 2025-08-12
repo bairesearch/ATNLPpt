@@ -706,35 +706,41 @@ elif(useNLPDataset):
 		def collate(batch):
 			B = len(batch)
 			# helper -------------------------------------------------------------
-			def pad1d(seqs, pad_id):
-				L = max(len(s) for s in seqs)
+			def pad1d(seqs, pad_id, L=None):
+				L = contextSizeMaxCharacters if L is None else L
 				out = pt.full((B, L), pad_id, dtype=pt.long)
 				for i, s in enumerate(seqs):
+					s = s[:L]
 					out[i, :len(s)] = pt.tensor(s, dtype=pt.long)
 				return out
-			def pad2d(seqs):				# for offset pairs
-				L = max(len(s) for s in seqs)
+			def pad2d(seqs, L=None):				# for offset pairs
+				L = contextSizeMaxCharacters if L is None else L
 				out = pt.full((B, L, 2), -1, dtype=pt.long)
 				for i, s in enumerate(seqs):
+					s = s[:L]
 					out[i, :len(s)] = pt.tensor(s, dtype=pt.long)
 				return out
 			PAD_STR  = "<PAD>"   # or "" if you prefer blank
 			PAD_INT  = 0         # same pad id you used before
-			def pad_text(seqs, pad_token=PAD_STR):  # <- NEW helper for strings
-				L = max(len(s) for s in seqs)
-				return [ s + [pad_token]*(L-len(s)) for s in seqs ]   # list-of-lists
+			def pad_text(seqs, pad_token=PAD_STR, L=None):  # <- NEW helper for strings
+				L = contextSizeMaxCharacters if L is None else L
+				padded = []
+				for s in seqs:
+					s = s[:L]
+					padded.append(s + [pad_token]*(L-len(s)))
+				return padded   # list-of-lists
 			# -------------------------------------------------------------------
 			if(useNLPDatasetMultipleTokenisationChar):
-				char_ids   = pad1d([s["char_input_ids"]   for s in batch], NLPpadTokenID)
+				char_ids   = pad1d([s["char_input_ids"]   for s in batch], NLPpadTokenID, L=contextSizeMaxCharacters)
 			if(useNLPDatasetMultipleTokenisationBert):
-				bert_ids   = pad1d([s["bert_input_ids"]   for s in batch], bert_pad_id)
-				bert_off   = pad2d([s["bert_offsets"]     for s in batch])
+				bert_ids   = pad1d([s["bert_input_ids"]   for s in batch], bert_pad_id, L=contextSizeMaxBertTokens)
+				bert_off   = pad2d([s["bert_offsets"]     for s in batch], L=contextSizeMaxBertTokens)
 			if(useNLPDatasetMultipleTokenisationSpacy):
-				spacy_ids  = pad1d([s["spacy_input_ids"]  for s in batch], 0)
-				spacy_pos  = pad1d([s["spacy_pos"]        for s in batch], 0)
-				spacy_tag  = pad1d([s["spacy_tag"]        for s in batch], 0)
-				spacy_text = pad_text([s["spacy_text"] for s in batch])
-				spacy_off  = pad2d([s["spacy_offsets"]    for s in batch])
+				spacy_ids  = pad1d([s["spacy_input_ids"]  for s in batch], 0, L=contextSizeMaxSpacyTokens)
+				spacy_pos  = pad1d([s["spacy_pos"]        for s in batch], 0, L=contextSizeMaxSpacyTokens)
+				spacy_tag  = pad1d([s["spacy_tag"]        for s in batch], 0, L=contextSizeMaxSpacyTokens)
+				spacy_text = pad_text([s["spacy_text"] for s in batch], L=contextSizeMaxSpacyTokens)
+				spacy_off  = pad2d([s["spacy_offsets"]    for s in batch], L=contextSizeMaxSpacyTokens)
 
 			x = {}
 			if(useNLPDatasetMultipleTokenisationChar):
