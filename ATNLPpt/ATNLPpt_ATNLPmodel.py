@@ -182,7 +182,7 @@ class ATNLPmodel(nn.Module):
 			# -----------------------------
 			seq_input_encoded = ATNLPpt_ATNLPmodelContinuousVarEncoding.encodeContinuousVarsAsBits(self, seq_input, ATNLPcontinuousVarEncodingNumBits).float()	#NLPcharacterInputSetLen	#[batchSize, sequenceLength*numBits]
 			seq_input_encoded = seq_input_encoded.reshape(B1, L1, C)	 #shape (B1, L1, C)
-			
+
 		numSubsamplesWithKeypoints = 0
 		accuracyAllWindows = 0.0
 		lossAllWindows = 0.0
@@ -238,17 +238,22 @@ class ATNLPmodel(nn.Module):
 					
 				y = self.generateClassTargetsAll(normalisedSequence)
 				
+				if(ATNLPcompareUntransformedTokenPredictionStrict):
+					padMask = ATNLPpt_prediction.derivePadMaskFromIds(seq_input, NLPpadTokenID)
+				else:
+					padMask = ATNLPpt_prediction. derivePadMaskFromProbs(normalisedSequence, NLPpadTokenID)
+
 				if(trainOrTest):
 					with torch.enable_grad():
 						self.predictionModel[l].train()
-						logits = self.predictionModel[l](normalisedSequence)
+						logits = self.predictionModel[l](normalisedSequence, padMask)
 						loss = ATNLPpt_prediction.loss_function(logits, y)
 						optim.zero_grad()
 						loss.backward()
 						optim.step()
 				else:
 					self.predictionModel[l].eval()
-					logits = self.predictionModel[l](normalisedSequence)
+					logits = self.predictionModel[l](normalisedSequence, padMask)
 					loss = ATNLPpt_prediction.loss_function(logits, y)
 				matches = ATNLPpt_prediction.calculate_matches(logits, y)
 				#print("y = ", y)
@@ -318,20 +323,17 @@ class ATNLPmodel(nn.Module):
 		return loss, accuracy, normalisedSnapshots
 	
 	def calculateAccuracy(self, matches, y):
-		# count how many are exactly correct
-		if(useNLPDatasetPaddingMask):
-			#print("y = ", y)
+		# matches: (B, L) bool, PAD already False from calculate_matches
+		if useNLPDatasetPaddingMask:
+			# y is one-hot/soft (B, L, C)
 			y = y.argmax(dim=-1)	#calculate top-1 accuracy
-			valid_mask = (y != NLPpadTokenID)
+			valid_mask = (y != NLPpadTokenID)  # (B, L)
 			valid_count = valid_mask.sum().item()
-			if valid_count > 0:
-				correct = (matches & valid_mask).sum().item()
-				accuracy = correct / valid_count
-			else:
-				accuracy = 0.0
 		else:
-			correct = matches.sum().item()
-			accuracy = correct / y.size(0)	#y.numel()
+			# fallback: count all positions
+			valid_count = matches.numel()
+		correct = matches.sum().item()
+		accuracy = float(correct) / max(1, valid_count)
 		return accuracy
 					
 	if(ATNLPsnapshotDatabaseDisk):

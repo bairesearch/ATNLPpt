@@ -49,6 +49,7 @@ paragraphCharDelimiterTypes = ["\n"]
 
 ATNLPusePredictionHead = True	#use ML model (transformer/wavenet) as a next token prediction head
 if(ATNLPusePredictionHead):
+	ATNLPtiePredictionHeadEncoderDecoderWeights = False
 	ATNLPcompareUntransformedTokenPrediction = False	#default: False	#train a predictive network with untransformed token prediction (ie standard transformer implementation)	#dev only
 	if(ATNLPcompareUntransformedTokenPrediction):
 		ATNLPcompareUntransformedTokenPredictionStrict = True	#generateSequenceInput does not expand (bert) tokens to characters
@@ -135,7 +136,7 @@ deviceSparse = ATNLPsnapshotDatabaseLoadDevice
 bertModelName = "bert-base-uncased"	#bertModelName = "bert-large-uncased"
 bertNumberTokenTypes = 30522	#tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")	print(len(tokenizer))
 
-useNLPcharacterInput = True		#default: False, recommended for ATNLPcompareUntransformedTokenPrediction (discrete token prediction comparison)
+useNLPcharacterInput = False		#default: False, recommended for ATNLPcompareUntransformedTokenPrediction (discrete token prediction comparison)
 if(useNLPcharacterInput):
 	if(ATNLPcompareUntransformedTokenPrediction):
 		 ATNLPcompareUntransformedTokenPredictionStrict = True	#char input never involves expansion to bert tokens
