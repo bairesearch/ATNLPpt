@@ -45,7 +45,7 @@ The model outputs one next-token prediction per element of the **B1** axis.
 
 Revision history
 ----------------
-* **v0.10**(2025-08-11) -- update DenseSnapshotEncoder
+* **v0.10**(2025-08-11) -- update DenseSnapshotEncoder/DenseSnapshotDecoder/TransformerBackbone
 * **v0.9**(2025-08-11) -- update loss_function/calculate_matches
 * **v0.8**(2025-08-01) -- add option ATNLPuseSequenceLevelPrediction: use input shape (B1*Q, R, L2*d)
 * **v0.7**(2025-07-23) -- *Layout change:* input is now `(B1,Q,R,L2,C), change TransformerBackbone to use input of shape (B1*Q, R*L2, d), add WaveNetBackbone
@@ -91,10 +91,12 @@ class DenseSnapshotDecoder(nn.Module):
 		# logits: (B, L, V)
 		logits = x @ self.emb.weight.T + self.bias
 
+		'''
 		# Mask PAD token's logit to -inf so it never gets predicted
 		if self.padding_idx is not None:
 			logits[..., self.padding_idx] = float("-inf")
-
+		'''
+		
 		return logits
 		
 # ---------------------------------------------------------------------------
@@ -264,7 +266,7 @@ class DenseSnapshotModel(nn.Module):
 # 5. evaluation utilities
 # ---------------------------------------------------------------------------
 
-def loss_function(logits: torch.Tensor, targets: torch.Tensor):
+def loss_function(logits: torch.Tensor, targets: torch.Tensor, padMask: torch.Tensor):
 	#print("logits.shape = ", logits.shape)
 	#print("targets.shape = ", targets.shape)
 	if(ATNLPcompareUntransformedTokenPredictionStrict):
@@ -275,7 +277,7 @@ def loss_function(logits: torch.Tensor, targets: torch.Tensor):
 		targets_idx = targets_idx.view(-1)					# (B*L)
 		loss = F.cross_entropy(logits, targets_idx, ignore_index=NLPpadTokenID)
 	else:
-		loss = softCrossEntropyUnnormalized(logits, targets)	#CHECKTHIS: assume token distribution at l in [B, L, C] are unnormalised (across C)
+		loss = softCrossEntropyUnnormalized(logits, targets, padMask)	#CHECKTHIS: assume token distribution at l in [B, L, C] are unnormalised (across C)
 	return loss
 	
 def calculate_matches(logits: torch.Tensor, targets: torch.Tensor) -> float:
@@ -290,6 +292,7 @@ def calculate_matches(logits: torch.Tensor, targets: torch.Tensor) -> float:
 def softCrossEntropyNormalized(
 	logits: torch.Tensor,			# (B, L, C)
 	targets: torch.Tensor,			# (B, L, C), rows sum to ~1
+	padMask: torch.Tensor,
 	eps: float = 1e-12
 ) -> torch.Tensor:
 	"""
@@ -299,7 +302,6 @@ def softCrossEntropyNormalized(
 	logp = F.log_softmax(logits, dim=-1)						# (B, L, C)
 	tokenLoss = -(targets * logp).sum(dim=-1)					# (B, L)
 
-	padMask = (targets.argmax(dim=-1) == NLPpadTokenID)		# (B, L) bool
 	weights = (~padMask).to(dtype=logits.dtype)
 
 	return (tokenLoss * weights).sum() / weights.sum().clamp_min(eps)
@@ -307,6 +309,7 @@ def softCrossEntropyNormalized(
 def softCrossEntropyUnnormalized(
 	logits: torch.Tensor,			# (B, L, C)
 	targets: torch.Tensor,			# (B, L, C), non-neg; rows may not sum to 1
+	padMask: torch.Tensor,
 	preserveMass: bool = False,
 	eps: float = 1e-12
 ) -> torch.Tensor:
@@ -324,7 +327,6 @@ def softCrossEntropyUnnormalized(
 	baseWeights = mass.squeeze(-1).to(dtype=logits.dtype) if preserveMass \
 		else torch.ones_like(tokenLoss, dtype=logits.dtype)
 
-	padMask = (targets.argmax(dim=-1) == NLPpadTokenID)		# (B, L) bool
 	weights = baseWeights * (~padMask).to(dtype=logits.dtype)
 
 	return (tokenLoss * weights).sum() / weights.sum().clamp_min(eps)

@@ -222,16 +222,13 @@ class ATNLPmodel(nn.Module):
 			if(ATNLPusePredictionHead):
 				if(ATNLPcompareUntransformedTokenPrediction):
 					normalisedSequence = seq_input_encoded	#shape (B1, L1, C)
-					numSubsamplesWithKeypoints += 1
 					normalisedSnapshots = None
 				else:
 					B1curr = normalisedSnapshots.shape[0]	#(B1,S,C,L2)
 					normalisedSnapshots = normalisedSnapshots.reshape(B1curr, R[l], Q[l], C, L2[l])	#reshape to (B1, R, Q, C, L2)
 					normalisedSnapshots = normalisedSnapshots.permute(0, 2, 1, 4, 3)	#(B1, Q, R, L2, C)
 				
-					if(self.detectValidNormalisedSnapshot(normalisedSnapshots)):
-						numSubsamplesWithKeypoints += 1
-					else:
+					if(not self.detectValidNormalisedSnapshot(normalisedSnapshots)):
 						continue
 
 					normalisedSequence = self.generateNormalisedSequence(normalisedSnapshots)	#transformer/wavenet: (B1*Q, R*L2, C)
@@ -243,18 +240,29 @@ class ATNLPmodel(nn.Module):
 				else:
 					padMask = ATNLPpt_prediction. derivePadMaskFromProbs(normalisedSequence, NLPpadTokenID)
 
+				#filter out empty sequences before the forward pass
+				valid_rows = ~padMask.all(dim=1)
+				normalisedSequence = normalisedSequence[valid_rows]
+				padMask = padMask[valid_rows]
+				y = y[valid_rows]
+				if normalisedSequence.numel() == 0:
+					continue
+				#print("l = ", l, ", normalisedSequence.count_nonzero() = ", normalisedSequence.count_nonzero())
+
+				numSubsamplesWithKeypoints += 1
+				
 				if(trainOrTest):
 					with torch.enable_grad():
 						self.predictionModel[l].train()
 						logits = self.predictionModel[l](normalisedSequence, padMask)
-						loss = ATNLPpt_prediction.loss_function(logits, y)
+						loss = ATNLPpt_prediction.loss_function(logits, y, padMask)
 						optim.zero_grad()
 						loss.backward()
 						optim.step()
 				else:
 					self.predictionModel[l].eval()
 					logits = self.predictionModel[l](normalisedSequence, padMask)
-					loss = ATNLPpt_prediction.loss_function(logits, y)
+					loss = ATNLPpt_prediction.loss_function(logits, y, padMask)
 				matches = ATNLPpt_prediction.calculate_matches(logits, y)
 				#print("y = ", y)
 				#print("logits = ", logits)
