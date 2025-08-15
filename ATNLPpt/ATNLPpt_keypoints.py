@@ -244,7 +244,7 @@ def generate_keypoint_pairs_from_prev_level(
 		RprevReal = len(kp_prev_level_used_batch[b])
 		aran = torch.arange(0, RprevReal, device=device, dtype=torch.long)
 		kp_use = kp_prev_level_used.int()*aran
-		if(not ATNLPuseSequenceLevelPrediction):
+		if(not ATNLPuseSequenceLevelPredictionInput):
 			kp_use = kp_use*L2prev	#generate keypoint indices by simply multiplying by number of tokens per normalised snapshot
 		if(len(kp_prev_level_used) > 0):
 			kp_use = kp_use[kp_prev_level_used]

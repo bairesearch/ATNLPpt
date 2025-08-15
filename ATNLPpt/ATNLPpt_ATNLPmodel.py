@@ -63,13 +63,26 @@ class ATNLPmodel(nn.Module):
 		self.config = config
 
 		if(ATNLPusePredictionHead):
+			# -----------------------------
+			# prediction head declaration
+			# -----------------------------
 			self.predictionModel = nn.ModuleList()
 			for l in range(ATNLPmultiLevels):
-				if(ATNLPuseSequenceLevelPrediction):
+				if(ATNLPuseSequenceLevelPredictionInput):
 					d_input = L2[l]*C
+					max_L = R[l]
 				else:
 					d_input = C
-				self.predictionModel.append(ATNLPpt_prediction.DenseSnapshotModel(d_input, d_model, backbone=backboneType))
+					max_L = R[l]*L2[l]
+				if(ATNLPdisableTransformation):
+					if(ATNLPdisableTransformationStrict):
+						max_L = contextSizeOrig
+					else:
+						max_L = contextSizeMax	#ie L1 or sequenceLength
+				if(not ATNLPpredictTransformedTokens):
+					max_L = contextSizeOrig
+				d_target = C
+				self.predictionModel.append(ATNLPpt_prediction.DenseSnapshotModel(d_input, d_target, d_model, max_L, backbone=backboneType))
 			self.predictionModel.to(device)
 		else:
 			# -----------------------------
@@ -99,12 +112,11 @@ class ATNLPmodel(nn.Module):
 	# ---------------------------------------------------------
 	# Forward pass
 	# ---------------------------------------------------------
-
 	#@torch.inference_mode()	#not supported by ATNLPusePredictionHead
 	@torch.no_grad()
 	def forward(self, trainOrTest: bool, x: torch.Tensor, y: Optional[torch.Tensor] = None, optim=None, l=None, batchIndex=None, fieldTypeList=None) -> Tuple[torch.Tensor, torch.Tensor]:
 		if(ATNLPusePredictionHead):
-			if(ATNLPcompareUntransformedTokenPrediction):
+			if(ATNLPdisableTransformation):
 				if(trainOrTest):
 					opt = optim[0]
 				else:
@@ -153,13 +165,14 @@ class ATNLPmodel(nn.Module):
 			predictions, outputActivations (both shape (batch, classes)).
 		"""
 		
-		if(not ATNLPcompareUntransformedTokenPrediction):
+		if(not ATNLPdisableTransformation):
 			kp_indices_batch, kp_meta_batch, kp_prev_level_used_batch = ATNLPpt_keypoints.build_keypoints(l, x['spacy_input_ids'], x['spacy_pos'], x['spacy_tag'], x['spacy_text'], x['spacy_offsets'])
 			if(debugATNLPkeypoints):
 				print("kp_indices_batch = ", kp_indices_batch)
 			
 		if(l == 0):
-			seq_input = self.generateSequenceInput(x)
+			input_ids, input_offsets  = self.generateSequenceInputOrig(x)
+			seq_input = self.generateSequenceInput(input_ids, input_offsets)
 			B1 = self.batchSize = seq_input.shape[0]
 
 		if(useSlidingWindow):
@@ -190,7 +203,7 @@ class ATNLPmodel(nn.Module):
 			if(debugSequentialLoops):
 				print("\n\tslidingWindowIndex = ", slidingWindowIndex)
 
-			if(not ATNLPcompareUntransformedTokenPrediction):
+			if(not ATNLPdisableTransformation):
 				# -----------------------------
 				# Transformation (normalisation)
 				# -----------------------------
@@ -220,50 +233,75 @@ class ATNLPmodel(nn.Module):
 			# Train/Prediction
 			# -----------------------------	
 			if(ATNLPusePredictionHead):
-				if(ATNLPcompareUntransformedTokenPrediction):
-					normalisedSequence = seq_input_encoded	#shape (B1, L1, C)
+						
+				if(ATNLPdisableTransformation):
 					normalisedSnapshots = None
+					predictionInput = seq_input_encoded	#shape (B1, L1, C)
 				else:
 					B1curr = normalisedSnapshots.shape[0]	#(B1,S,C,L2)
 					normalisedSnapshots = normalisedSnapshots.reshape(B1curr, R[l], Q[l], C, L2[l])	#reshape to (B1, R, Q, C, L2)
 					normalisedSnapshots = normalisedSnapshots.permute(0, 2, 1, 4, 3)	#(B1, Q, R, L2, C)
-				
 					if(not self.detectValidNormalisedSnapshot(normalisedSnapshots)):
 						continue
 
 					normalisedSequence = self.generateNormalisedSequence(normalisedSnapshots)	#transformer/wavenet: (B1*Q, R*L2, C)
+					predictionInput = normalisedSequence
 					
-				y = self.generateClassTargetsAll(normalisedSequence)
-				
-				if(ATNLPcompareUntransformedTokenPredictionStrict):
-					padMask = ATNLPpt_prediction.derivePadMaskFromIds(seq_input, NLPpadTokenID)
+				if(ATNLPdisableTransformationStrict):
+					onehotTargets = False
 				else:
-					padMask = ATNLPpt_prediction. derivePadMaskFromProbs(normalisedSequence, NLPpadTokenID)
-
-				#filter out empty sequences before the forward pass
-				valid_rows = ~padMask.all(dim=1)
-				normalisedSequence = normalisedSequence[valid_rows]
-				padMask = padMask[valid_rows]
-				y = y[valid_rows]
-				if normalisedSequence.numel() == 0:
-					continue
-				#print("l = ", l, ", normalisedSequence.count_nonzero() = ", normalisedSequence.count_nonzero())
-
-				numSubsamplesWithKeypoints += 1
+					if(ATNLPpredictTransformedTokens):
+						onehotTargets = True
+					else:
+						onehotTargets = False
 				
+				if(onehotTargets):
+					y = self.generateClassTargetsAll(predictionInput, onehotTargets)
+					xPadMask = ATNLPpt_prediction.derivePadMaskFromProbs(predictionInput, NLPpadTokenID)
+					yPadMask = xPadMask
+				else:
+					if(ATNLPpredictTransformedTokens):
+						y = self.generateClassTargetsAll(seq_input, onehotTargets)
+					else:
+						y = input_ids	#CHECKTHIS: no shift
+					if(ATNLPdisableTransformationStrict):
+						xPadMask = ATNLPpt_prediction.derivePadMaskFromIds(input_ids, NLPpadTokenID)	#xPadMask is not used
+					else:	#ie ATNLPpredictTransformedTokens=False
+						xPadMask = ATNLPpt_prediction.derivePadMaskFromProbs(predictionInput, NLPpadTokenID)
+					yPadMask = ATNLPpt_prediction.derivePadMaskFromIds(input_ids, NLPpadTokenID)
+
+				if(not ATNLPdisableTransformation):
+					#filter out empty sequences before the forward pass
+					valid_rows = ~xPadMask.all(dim=1)
+					predictionInput = predictionInput[valid_rows]
+					y = y[valid_rows]
+					xPadMask = xPadMask[valid_rows]
+					yPadMask = yPadMask[valid_rows]
+					if predictionInput.numel() == 0:
+						continue
+					#print("l = ", l, ", predictionInput.count_nonzero() = ", predictionInput.count_nonzero())
+					
+				numSubsamplesWithKeypoints += 1
+								
 				if(trainOrTest):
 					with torch.enable_grad():
 						self.predictionModel[l].train()
-						logits = self.predictionModel[l](normalisedSequence, padMask)
-						loss = ATNLPpt_prediction.loss_function(logits, y, padMask)
+						if(ATNLPpredictTransformedTokens):
+							logits = self.predictionModel[l](predictionInput, xPadMask)
+						else:
+							logits = self.predictionModel[l](predictionInput, y, xPadMask, yPadMask)
+						loss = ATNLPpt_prediction.loss_function(logits, y, yPadMask, onehotTargets)
 						optim.zero_grad()
 						loss.backward()
 						optim.step()
 				else:
 					self.predictionModel[l].eval()
-					logits = self.predictionModel[l](normalisedSequence, padMask)
-					loss = ATNLPpt_prediction.loss_function(logits, y, padMask)
-				matches = ATNLPpt_prediction.calculate_matches(logits, y)
+					if(ATNLPpredictTransformedTokens):
+						logits = self.predictionModel[l](predictionInput, xPadMask)
+					else:
+						logits = self.predictionModel[l](predictionInput, y, xPadMask, yPadMask)
+					loss = ATNLPpt_prediction.loss_function(logits, y, yPadMask, onehotTargets)
+				matches = ATNLPpt_prediction.calculate_matches(logits, y, onehotTargets)
 				#print("y = ", y)
 				#print("logits = ", logits)
 				#print("matches = ", matches)
@@ -275,8 +313,9 @@ class ATNLPmodel(nn.Module):
 				else:
 					continue
 				
+				onehotTargets = False
 				y, classTargets = self.generateClassTargetsSlidingWindow(slidingWindowIndex, normalisedSnapshots, seq_input)
-
+			
 				normalisedSnapshots = normalisedSnapshots.to_sparse_coo()
 				normalisedSnapshots = normalisedSnapshots.coalesce()
 
@@ -308,7 +347,7 @@ class ATNLPmodel(nn.Module):
 					matches = (predictions == y)
 				
 			if(comparisonFound):
-				accuracy = self.calculateAccuracy(matches, y)
+				accuracy = self.calculateAccuracy(matches, y, onehotTargets)
 				
 				accuracyAllWindows += accuracy
 				lossAllWindows += loss
@@ -330,11 +369,12 @@ class ATNLPmodel(nn.Module):
 		
 		return loss, accuracy, normalisedSnapshots
 	
-	def calculateAccuracy(self, matches, y):
+	def calculateAccuracy(self, matches, y, onehotTargets):
 		# matches: (B, L) bool, PAD already False from calculate_matches
 		if useNLPDatasetPaddingMask:
 			# y is one-hot/soft (B, L, C)
-			y = y.argmax(dim=-1)	#calculate top-1 accuracy
+			if(onehotTargets):
+				y = y.argmax(dim=-1)	#calculate top-1 accuracy
 			valid_mask = (y != NLPpadTokenID)  # (B, L)
 			valid_count = valid_mask.sum().item()
 		else:
@@ -471,19 +511,25 @@ class ATNLPmodel(nn.Module):
 		B1, Q, R, L2, C = x.shape
 		if backboneType == "transformer" or backboneType == "wavenet":
 			#no sliding window (generate predictions for each token)
-			if(ATNLPuseSequenceLevelPrediction and supportSequenceLevelPrediction):
+			if(ATNLPuseSequenceLevelPredictionInput and supportSequenceLevelPrediction):
 				x = x.reshape(B1*Q, R, L2*C)                        # (B1*Q, R, L2*C)
 			else:
 				x = x.reshape(B1*Q, R*L2, C)                        # (B1*Q, R*L2, C)
 		return x
 	
-	def generateClassTargetsAll(self, normalisedSequence):
-		#normalisedSequence: (B1*Q, R*L2, C)
+	def generateClassTargetsAll(self, inputSequence, onehotTargets):
+		#inputSequence: (B1*Q, R*L2, C)
 		#FUTURE: create decoder to predict individual bert/character tokens rather than normalised snapshot interpolated bert tokens
-		B1Q, RL2, C = normalisedSequence.shape	#or ATNLPuseSequenceLevelPrediction: B1Q, R, L2C
-		yLeft = normalisedSequence[:, 1:, :] #(B1*Q, R*L2, C)
-		yPad = torch.zeros((B1Q, 1, C), device=normalisedSequence.device)	#final token in sequence does not have a valid prediction value
-		y = torch.cat((yLeft, yPad), dim=1) 
+		if(onehotTargets):
+			B1Q, RL2, C = inputSequence.shape	#or ATNLPuseSequenceLevelPredictionInput: B1Q, R, L2C
+			yLeft = inputSequence[:, 1:, :] #(B1*Q, R*L2, C)
+			yPad = torch.zeros((B1Q, 1, C), device=inputSequence.device)	#final token in sequence does not have a valid prediction value
+			y = torch.cat((yLeft, yPad), dim=1) 
+		else:
+			B1, L = inputSequence.shape
+			yLeft = inputSequence[:, 1:]
+			yPad = torch.zeros((B1, 1), dtype=torch.long, device=inputSequence.device)	#final token in sequence does not have a valid prediction value
+			y = torch.cat((yLeft, yPad), dim=1) 
 		return y
 	
 	def generateClassTargetsSlidingWindow(self, slidingWindowIndex, normalisedSnapshots, seq_input):
@@ -513,12 +559,21 @@ class ATNLPmodel(nn.Module):
 			else:
 				ATNLPpt_database.finaliseTrainedSnapshotDatabase(self)	#generate self.database tensor from database for comparison
 	
-	def generateSequenceInput(self, x):
+	def generateSequenceInputOrig(self, x):
 		if(useNLPcharacterInput):
 			seq_input = x['char_input_ids'].to(device)	# Tensor [batchSize, sequenceLength]
+			seq_input_offsets = None
 		else:
-			if(ATNLPcompareUntransformedTokenPredictionStrict):
-				seq_input = x['bert_input_ids'].to(device)	# Tensor [batchSize, sequenceLength]
+			seq_input = x['bert_input_ids'].to(device)	# Tensor [batchSize, sequenceLength]
+			seq_input_offsets = x['bert_offsets'].to(device)	#(B, Lb, 2)  int64
+		return seq_input, seq_input_offsets
+		
+	def generateSequenceInput(self, input_ids, input_offsets=None):
+		if(useNLPcharacterInput):
+			seq_input = input_ids	# Tensor [batchSize, sequenceLength]
+		else:
+			if(ATNLPdisableTransformationStrict):
+				seq_input = input_ids	# Tensor [batchSize, sequenceLength]
 			else:
 				"""
 				Expand word-piece IDs so every character position gets the ID of the token that covers it.
@@ -527,8 +582,8 @@ class ATNLPmodel(nn.Module):
 					ids_per_char : (B, Lc)  int64
 				"""
 
-				bert_input_ids = x['bert_input_ids'].to(device)	# (B, Lb)	 int64
-				bert_offsets = x['bert_offsets'].to(device)	#(B, Lb, 2)  int64
+				bert_input_ids = input_ids.to(device)	# (B, Lb)	 int64
+				bert_offsets = input_offsets.to(device)	#(B, Lb, 2)  int64
 				Lc = contextSizeMax
 				pad_id = NLPpadTokenID
 

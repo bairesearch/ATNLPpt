@@ -45,10 +45,11 @@ The model outputs one next-token prediction per element of the **B1** axis.
 
 Revision history
 ----------------
-* **v0.10**(2025-08-11) -- update DenseSnapshotEncoder/DenseSnapshotDecoder/TransformerBackbone
+* **v0.11**(2025-08-11) -- add option ATNLPpredictTransformedTokens=False (use nn.TransformerDecoder) 
+* **v0.10**(2025-08-11) -- update DenseSnapshotEncoder/DenseSnapshotDecoder/TransformerEncoderBackbone
 * **v0.9**(2025-08-11) -- update loss_function/calculate_matches
-* **v0.8**(2025-08-01) -- add option ATNLPuseSequenceLevelPrediction: use input shape (B1*Q, R, L2*d)
-* **v0.7**(2025-07-23) -- *Layout change:* input is now `(B1,Q,R,L2,C), change TransformerBackbone to use input of shape (B1*Q, R*L2, d), add WaveNetBackbone
+* **v0.8**(2025-08-01) -- add option ATNLPuseSequenceLevelPredictionInput: use input shape (B1*Q, R, L2*d)
+* **v0.7**(2025-07-23) -- *Layout change:* input is now `(B1,Q,R,L2,C), change TransformerEncoderBackbone to use input of shape (B1*Q, R*L2, d), add WaveNetBackbone
 * **v0.6**(2025-07-22) -- *Layout change:* input is now `(B1,R,Q,L2,C)
 * **v0.5**(2025-07-18) -- assume no padding; removed `lens`-based masking and simplified the forward pass accordingly.
 * **v0.4**(2025-07-18) -- bug-fix for CNN length preservation.
@@ -103,48 +104,87 @@ class DenseSnapshotDecoder(nn.Module):
 # 2.  Causal Backbones
 # ---------------------------------------------------------------------------
 
-class TransformerBackbone(nn.Module):
-	"""
-	Stack of `nn.TransformerEncoder` layers (batch-first).
-	Includes learnable positional embeddings along the R axis.
-	"""
+if(ATNLPpredictTransformedTokens):
+	class TransformerEncoderBackbone(nn.Module):
+		"""
+		Stack of `nn.TransformerEncoder` layers (batch-first).
+		Includes learnable positional embeddings along the R axis.
+		"""
 
-	def __init__(self, d_in: int, nhead: int = 8, nlayers: int = 6, max_R: int = contextSizeMax, causal: bool = True):
-		super().__init__()
-		self.pos_emb = nn.Embedding(max_R, d_in)
-		enc_layer = nn.TransformerEncoderLayer(d_model=d_in, nhead=nhead, dim_feedforward=4 * d_in, batch_first=True, norm_first=True)
-		self.enc = nn.TransformerEncoder(enc_layer, nlayers)
-		self.causal = causal
-		self._mask_cache = {}	# cache for causal masks keyed by (S, device, dtype)
+		def __init__(self, d_in: int, max_L: int, nhead: int = 8, nlayers: int = 6, causal: bool = True):
+			super().__init__()
+			self.pos_emb = nn.Embedding(max_L, d_in)
+			d_ff = 4 * d_in
+			enc_layer = nn.TransformerEncoderLayer(d_model=d_in, nhead=nhead, dim_feedforward=d_ff, batch_first=True, norm_first=True)
+			self.enc = nn.TransformerEncoder(enc_layer, nlayers)
+			self.causal = causal
+			self._mask_cache = {}	# cache for causal masks keyed by (S, device, dtype)
 
-	def forward(self, x: torch.Tensor, padMask: torch.Tensor) -> torch.Tensor:
-		# x: (B1*Q, R*L2, d)
-		RL2 = x.size(1)
-		assert RL2 <= self.pos_emb.num_embeddings, f"seq len {RL2} > max_R {self.pos_emb.num_embeddings}"
-		pos_ids = torch.arange(RL2, device=x.device).unsqueeze(0)	# (1, RL2)
-		x = x + self.pos_emb(pos_ids)								# broadcast
-		if self.causal:
-			attn_mask = self._get_causal_mask(RL2, x.device, x.dtype)
-			out = self.enc(x, mask=attn_mask, src_key_padding_mask=padMask, is_causal=True)					# (B1*Q, R*L2, d)
-		else:
-			out = self.enc(x, src_key_padding_mask=padMask)
-		return out
+		def forward(self, x: torch.Tensor, padMask: torch.Tensor) -> torch.Tensor:
+			# x: (B1*Q, R*L2, d)
+			RL2 = x.size(1)
+			assert RL2 <= self.pos_emb.num_embeddings, f"seq len {RL2} > max_L {self.pos_emb.num_embeddings}"
+			pos_ids = torch.arange(RL2, device=x.device).unsqueeze(0)	# (1, RL2)
+			x = x + self.pos_emb(pos_ids)								# broadcast
+			if self.causal:
+				attn_mask = self._get_causal_mask(RL2, x.device, x.dtype)
+				out = self.enc(x, mask=attn_mask, src_key_padding_mask=padMask, is_causal=True)					# (B1*Q, R*L2, d)
+			else:
+				out = self.enc(x, src_key_padding_mask=padMask)
+			return out
 
-	def _get_causal_mask(self, S: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
-		key = (S, device, dtype)
-		m = self._mask_cache.get(key)
-		if m is None:
-			# additive mask: 0 on/below diagonal, -inf above (future positions)
-			m = torch.triu(torch.full((S, S), float('-inf'), device=device, dtype=dtype), diagonal=1)
-			self._mask_cache[key] = m
-		return m
-		
+		def _get_causal_mask(self, S: int, device: torch.device, dtype: torch.dtype) -> torch.Tensor:
+			key = (S, device, dtype)
+			m = self._mask_cache.get(key)
+			if m is None:
+				# additive mask: 0 on/below diagonal, -inf above (future positions)
+				#m = torch.triu(torch.full((S, S), float('-inf'), device=device, dtype=dtype), diagonal=1)
+				m = torch.triu(torch.ones(S, S, dtype=torch.bool, device=device), 1)
+				self._mask_cache[key] = m
+			return m
+else:
+	class TransformerDecoderBackbone(nn.Module):
+		"""
+		Stack of `nn.TransformerDecoder` layers (batch-first).
+		"""
+
+		def __init__(self, d_in: int, max_L: int, pad_id: int, nhead: int = 8, nlayers: int = 6, causal: bool = True):
+			super().__init__()
+			self.pos_emb = nn.Embedding(max_L, d_in)
+			d_ff = 4 * d_in
+			dec_layer = nn.TransformerDecoderLayer(d_model=d_model, nhead=nhead, dim_feedforward=d_ff, batch_first=True, norm_first=True)
+			self.decoder = nn.TransformerDecoder(dec_layer, nlayers)
+			self.causal = causal	#implied true via _get_causal_mask
+			self._mask_cache = {}	# cache for causal masks keyed by (S, device, dtype)
+			self.pad_id = pad_id
+
+		def forward(self, x: torch.Tensor, y : torch.Tensor, xPadMask: torch.Tensor, yPadMask: torch.Tensor) -> torch.Tensor:
+			# x: (B1, L1, d_model)
+			# y: (B1, L1, d_model)
+			B, L, _  = y.shape
+			device = x.device
+			pos_ids = torch.arange(L, device=device).unsqueeze(0)	# (1, L1)
+			posemb = self.pos_emb(pos_ids)
+			tgt = y + posemb		# broadcast
+			tgt_key_padding_mask = yPadMask    # (B1, L1)
+			tgt_mask = self._get_causal_mask(L, device)            # (L, L)
+			mem_pad_mask = xPadMask
+			out = self.decoder(tgt=tgt, memory=x, tgt_mask=tgt_mask, tgt_key_padding_mask=tgt_key_padding_mask, memory_key_padding_mask=mem_pad_mask)
+			return out
+
+		def _get_causal_mask(self, S: int, device: torch.device) -> torch.Tensor:
+			key = (S, device)
+			m = self._mask_cache.get(key)
+			if m is None:
+				m = torch.triu(torch.ones(S, S, dtype=torch.bool, device=device), 1)
+				self._mask_cache[key] = m
+			return m
 		
 class WaveNetBackbone(nn.Module):
 	"""
 	Causal dilated 1-D conv stack  la WaveNet, along the R axis.
 	Input/Output: (B, R, D) where D == d_in (typically L2*d from your upstream reshape).
-	API mirrors TransformerBackbone.
+	API mirrors TransformerEncoderBackbone.
 	"""
 
 	def __init__(
@@ -228,63 +268,81 @@ class DenseSnapshotModel(nn.Module):
 	def __init__(
 		self,
 		d_input: int,
-		d_model: int = 512,
-		backbone: str = "transformer",
-		backbone_kwargs: Optional[Dict] = None,
-		pretrained_embed: Optional[torch.Tensor] = None,
+		d_target: int,
+		d_model: int,
+		max_L: int,
+		backbone: str,
 	):
 		super().__init__()
 		self.d_model = d_model
 		self.encoder = DenseSnapshotEncoder(d_input, d_model, NLPpadTokenID)
+		if(not ATNLPpredictTransformedTokens):
+			self.target_encoder = nn.Embedding(d_target, d_model)
+
 		self.backbone_type = backbone
-		if backbone_kwargs is None:
-			backbone_kwargs = {}
 		if backbone == "transformer":
-			self.backbone = TransformerBackbone(d_model, **backbone_kwargs)
+			if(ATNLPpredictTransformedTokens):
+				self.backbone = TransformerEncoderBackbone(d_model, max_L)
+			else:
+				self.backbone = TransformerDecoderBackbone(d_model, max_L, NLPpadTokenID)
 			self.decoder = DenseSnapshotDecoder(self.encoder.emb, NLPpadTokenID)
 		elif backbone == "wavenet":
-			self.backbone = WaveNetBackbone(d_model, **backbone_kwargs)
+			self.backbone = WaveNetBackbone(d_model)
 			self.decoder = DenseSnapshotDecoder(self.encoder.emb, NLPpadTokenID)
 		else:
 			printe("Unknown backbone {backbone}")
 		
-		
-	def forward(self, x: torch.Tensor, padMask: torch.Tensor, trainOrTest: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
-		"""Return `(logits, fused_rep)`.
+	if(ATNLPpredictTransformedTokens):
+		def forward(self, x: torch.Tensor, padMask: torch.Tensor, trainOrTest: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
+			"""Return `(logits, fused_rep)`.
 
-		* **x** - (B1*Q,R*L2,C)
-		*	**logits** - (B1*Q, R*L2-1, C) one prediction for each token
-		"""
-		x = self.encoder(x)				# (B1*Q,R*L2,d)
-		enc = self.backbone(x, padMask)	#transformer/wavenet: (B1*Q, R*L2, d)
-		logits = self.decoder(enc)	#transformer/wavenet: (B1*Q, R*L2, C)
-		#print("logits = ", logits)
+			* **x** - (B1*Q,R*L2,C)
+			*	**logits** - (B1*Q, R*L2-1, C) one prediction for each token
+			"""
+			x = self.encoder(x)				# (B1*Q,R*L2,d)
+			enc = self.backbone(x, padMask)	#transformer/wavenet: (B1*Q, R*L2, d)
+			logits = self.decoder(enc)	#transformer/wavenet: (B1*Q, R*L2, C)
+			#print("logits = ", logits)
 
-		return logits
+			return logits
+	else:
+		def forward(self, x: torch.Tensor, y: torch.Tensor, xPadMask: torch.Tensor, yPadMask: torch.Tensor, trainOrTest: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
+			"""
+			* **x** - (B1,R,L2*C)	#assume Q=1
+			* **y** - (B1,L1)
+			"""
+			x = self.encoder(x)				# (B1,R,d)
+			y = self.target_encoder(y)				# (B1,L1,d)
+			enc = self.backbone(x, y, xPadMask, yPadMask)		#transformer: (B1, R*L2, d)
+			logits = self.decoder(enc)	#transformer/wavenet: (B1, L1, C)
+			#print("logits = ", logits)
+
+			return logits
 
 # ---------------------------------------------------------------------------
 # 5. evaluation utilities
 # ---------------------------------------------------------------------------
 
-def loss_function(logits: torch.Tensor, targets: torch.Tensor, padMask: torch.Tensor):
+def loss_function(logits: torch.Tensor, targets: torch.Tensor, padMask: torch.Tensor, onehotTargets: bool):
 	#print("logits.shape = ", logits.shape)
 	#print("targets.shape = ", targets.shape)
-	if(ATNLPcompareUntransformedTokenPredictionStrict):
+	if(onehotTargets):
+		loss = softCrossEntropyUnnormalized(logits, targets, padMask)	#CHECKTHIS: assume token distribution at l in [B, L, C] are unnormalised (across C)
+	else:
 		"""Cross-entropy loss over flattened B1*L dimension with PAD masked out."""
 		# targets: (B, L, C) one-hot; convert to indices
-		targets_idx = targets.argmax(dim=-1)				  # (B, L)
+		targets_idx = targets			  # (B, L)
 		logits = logits.view(-1, logits.size(-1))			 # (B*L, C)
 		targets_idx = targets_idx.view(-1)					# (B*L)
 		loss = F.cross_entropy(logits, targets_idx, ignore_index=NLPpadTokenID)
-	else:
-		loss = softCrossEntropyUnnormalized(logits, targets, padMask)	#CHECKTHIS: assume token distribution at l in [B, L, C] are unnormalised (across C)
 	return loss
 	
-def calculate_matches(logits: torch.Tensor, targets: torch.Tensor) -> float:
+def calculate_matches(logits: torch.Tensor, targets: torch.Tensor, onehotTargets: bool) -> float:
 	"""Compute bool top-1 accuracy (1/0) for each sample in mini-batch."""
+	if(onehotTargets):
+		targets = targets.argmax(dim=-1)	#compare a single target	#calculate top-1 accuracy
 	#preds = logits	#compare a distribution of targets across C (normalised snapshot tokens contain a distribution of bert tokens, not a single bert token)
 	preds = logits.argmax(dim=-1)	#compare a single target
-	targets = targets.argmax(dim=-1)	#compare a single target	#calculate top-1 accuracy
 	valid_mask = (targets != NLPpadTokenID)	#redundant (performed by calculateAccuracy)
 	matches = (preds == targets) & valid_mask
 	return matches

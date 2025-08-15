@@ -34,7 +34,7 @@ useNLPDatasetPaddingMask = True	#default: True	#not strictly required for wikipe
 enforceConfigBatchSize = True	#required such that (B1 and) B2 can be determined at initialisation (not dynamic)
 debugOnlyPrintStreamedWikiArticleTitles = False
 
-ATNLPcompareUntransformedTokenPredictionStrict = False	#dependent var (initialisation only)
+ATNLPdisableTransformationStrict = False	#dependent var (initialisation only)
 
 import torch as pt
 if pt.cuda.is_available():
@@ -47,44 +47,44 @@ referenceSetPosDelimiterTypes = ["VB", "VBD", "VBG", "VBN", "VBP", "VBZ"]	#prep:
 sentenceCharDelimiterTypes = [".", "?", "!"]
 paragraphCharDelimiterTypes = ["\n"]
 
+#initialise (dependent vars);
+ATNLPdisableTransformation = False
+ATNLPuseSequenceLevelPredictionInput = False
+ATNLPpredictTransformedTokens = True
+ATNLPuseMultiLevelTokenPrediction = False
+ATNLPmultiLevelOnlyPredictLastLevel = False
+ATNLPmultiLevels = 1
+
 ATNLPusePredictionHead = True	#use ML model (transformer/wavenet) as a next token prediction head
 if(ATNLPusePredictionHead):
-	ATNLPtiePredictionHeadEncoderDecoderWeights = False
-	ATNLPcompareUntransformedTokenPrediction = False	#default: False	#train a predictive network with untransformed token prediction (ie standard transformer implementation)	#dev only
-	if(ATNLPcompareUntransformedTokenPrediction):
-		ATNLPcompareUntransformedTokenPredictionStrict = True	#generateSequenceInput does not expand (bert) tokens to characters
-		ATNLPuseMultiLevelTokenPrediction = False
-		ATNLPmultiLevelOnlyPredictLastLevel = False
-		ATNLPmultiLevels = 1
+	ATNLPdisableTransformation = False	#default: False	#train a predictive network with untransformed token prediction (ie standard transformer implementation)	#dev only
+	if(ATNLPdisableTransformation):
+		ATNLPdisableTransformationStrict = True	#generateSequenceInput does not expand (bert) tokens to characters
 	else:
-		ATNLPuseMultiLevelTokenPrediction = True	#optional	#predicts char/subword (bert), subsentence (reference set), sentence, paragraph tokens
+		ATNLPpredictTransformedTokens = False	#optional	#orig: False 	#predict transformed tokens (else predict untransformed tokens)
+		ATNLPuseSequenceLevelPredictionInput = False	#optional	ATNLPpredictTransformedTokens: predicts sequence tokens (eg reference sets) from sequence tokens, #!ATNLPpredictTransformedTokens: predicts untransformed subsequence tokens from sequence tokens		#ATNLPpredictTransformedTokens: - if !ATNLPuseSequenceLevelPredictionInput, prediction target = 'subwords'; or if ATNLPuseSequenceLevelPredictionInput: prediction target = 'referenceSets'
+		ATNLPuseMultiLevelTokenPrediction = False	#optional	#predicts char/subword (bert), subsentence (reference set), sentence, paragraph tokens
 		if(ATNLPuseMultiLevelTokenPrediction):
 			ATNLPmultiLevelOnlyPredictLastLevel = False	#default: False	#only perform prediction across last level of token generation
 			ATNLPmultiLevels = 3
 			ATNLPmultiLevelTokensDelimiterNames = ['pos', 'eos', 'eop']
 			ATNLPmultiLevelTokensDelimiterTypes = ['pos', 'char', 'char']
-			ATNLPmultiLevelTokens = ['referenceSets', 'sentences', 'paragraphs']	#if !ATNLPuseSequenceLevelPrediction, prediction targets = ['subwords', 'referenceSets', 'sentences']; or if ATNLPuseSequenceLevelPrediction: prediction targets = ['referenceSets', 'sentences', 'paragraphs']
+			ATNLPmultiLevelTokens = ['referenceSets', 'sentences', 'paragraphs']	#if !ATNLPuseSequenceLevelPredictionInput, prediction targets = ['subwords', 'referenceSets', 'sentences']; or if ATNLPuseSequenceLevelPredictionInput: prediction targets = ['referenceSets', 'sentences', 'paragraphs']
 			ATNLPmultiLevelTokensDelimiters = [referenceSetPosDelimiterTypes, sentenceCharDelimiterTypes, paragraphCharDelimiterTypes]
 		else:
 			ATNLPmultiLevelOnlyPredictLastLevel = False
 			ATNLPmultiLevels = 1
-	ATNLPuseSequenceLevelPrediction = False	#optional	#predicts sequences (eg reference sets) rather than normalised tokens	#if !ATNLPuseSequenceLevelPrediction, prediction target = 'subwords'; or if ATNLPuseSequenceLevelPrediction: prediction target = 'referenceSets'
 	backboneType = "transformer" #"transformer", "wavenet"
-	reorderPairsToBeNotReversed = True	#default: True - prediction head may expect ordered normalised snapshots as input 
+	reorderPairsToBeNotReversed = True	#mandatory: True - prediction head may expect ordered normalised snapshots as input 
 	optimiserAdamW = True
 	useCustomLearningAlgorithm = False
 	trainLocalIndividialLayers = False	#train once per prediction head model execution
 	d_model = 128	#normalised snapshot token encoding size
 	useSlidingWindow = False	#does not use sliding window during training
 else:
-	ATNLPuseMultiLevelTokenPrediction = False	#mandatory: False
-	ATNLPmultiLevels = 1
-	ATNLPuseSequenceLevelPrediction = False	#mandatory: False
-	backboneType = "none"
+	useSlidingWindow = True		#mandatory
 	useCustomLearningAlgorithm = True	#mandatory (disable all backprop optimisers)
 	reorderPairsToBeNotReversed = False	#default: False (process last normalised snapshot first as this is special; it is only defined by 1 reference set delimiter keypoint)
-	useSlidingWindow = True		#mandatory
-	ATNLPcompareUntransformedTokenPrediction = False
 trainLocal = True	#local learning rule	#required
 	
 ATNLPindexDatabaseByClassTarget = True	#optional	#overload normalised snapshots with same class target	#orig: False
@@ -136,14 +136,14 @@ deviceSparse = ATNLPsnapshotDatabaseLoadDevice
 bertModelName = "bert-base-uncased"	#bertModelName = "bert-large-uncased"
 bertNumberTokenTypes = 30522	#tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")	print(len(tokenizer))
 
-useNLPcharacterInput = False		#default: False, recommended for ATNLPcompareUntransformedTokenPrediction (discrete token prediction comparison)
+useNLPcharacterInput = False		#default: False, recommended for ATNLPdisableTransformation (discrete token prediction comparison)
 if(useNLPcharacterInput):
-	if(ATNLPcompareUntransformedTokenPrediction):
-		 ATNLPcompareUntransformedTokenPredictionStrict = True	#char input never involves expansion to bert tokens
+	if(ATNLPdisableTransformation):
+		 ATNLPdisableTransformationStrict = True	#char input never involves expansion to bert tokens
 	
 useNLPDatasetMultipleTokenisation = True	#mandatory: True	#required for spacy tokenisation
 if(useNLPDatasetMultipleTokenisation):
-	if(ATNLPcompareUntransformedTokenPrediction):
+	if(ATNLPdisableTransformation):
 		useNLPDatasetMultipleTokenisationSpacy = False
 	else:
 		useNLPDatasetMultipleTokenisationSpacy = True
@@ -172,11 +172,15 @@ else:
 if(useNLPcharacterInput):
 	contextSizeMax = 512*4	#default: 2048	#useNLPcharacterInput requires less memory
 else:
-	contextSizeMax = 128*4	#default: 512	#production: 512*4	#specified in characters	#assume approx 4 characters per BERT token
+	contextSizeMax = 128*4	#default: 512	#production: 512*4	#specified in characters	#assume approx 4 characters per BERT token 
 contextSizeMaxCharacters = contextSizeMax	
 contextSizeMaxBertTokens = contextSizeMax//2	#safe only (max)	#average: //4	- wikipedia average token length
 contextSizeMaxSpacyTokens = contextSizeMax//4	#safe only (max)	#average: //6	- wikipedia average word length
-
+if(useNLPcharacterInput):
+	contextSizeOrig = contextSizeMaxCharacters
+else:
+	contextSizeOrig = contextSizeMaxBertTokens
+	
 numberOfClasses = ATNLPcontinuousVarEncodingNumBits
 
 sequenceLength = contextSizeMax
@@ -189,10 +193,10 @@ inputDataNames = ["char_input_ids", "bert_input_ids", "bert_offsets", "spacy_inp
 C = ATNLPcontinuousVarEncodingNumBits	#vocabulary size
 
 #sequence length vars;
-if(ATNLPcompareUntransformedTokenPredictionStrict and not useNLPcharacterInput):
+if(ATNLPdisableTransformationStrict and not useNLPcharacterInput):
 	L1 = contextSizeMaxBertTokens
 else:
-	L1 = sequenceLength
+	L1 = sequenceLength	#ie contextSizeMax or contextSizeMaxCharacters
 
 #keypoint extraction vars;
 keypointModes = Literal["allKeypointCombinations", "firstKeypointConsecutivePairs", "firstKeypointPairs"]
@@ -202,6 +206,7 @@ if(ATNLPusePredictionHead):
 		R[l] = 5*(ATNLPmultiLevels-l)	#default: 10	#the last R (user defined) set of 2 consecutive keypoints in batch sequence	#max number of reference sets in batch sequence (if less reference sets detected in sequence some normalised snapshots will be filled with zeros)
 		Q[l] = 1	#the last R (user defined) set of 2 keypoints (of distance Q) in batch sequence
 		L2[l] = 8	#default: 8	#normalisation length for each reference set
+		if not ATNLPpredictTransformedTokens: assert Q[l] == 1
 	if(ATNLPuseMultiLevelTokenPrediction and ATNLPmultiLevelOnlyPredictLastLevel):
 		#assume contextSizeMax = 128*4	#default: 512 
 		L2[0] = 8*4	#assume approx 4 characters per BERT token	#~8*4 characters per reference set
@@ -211,7 +216,8 @@ else:
 	R = 3	#the last R (user defined) set of 2 consecutive keypoints in batch sequence
 	Q = 1   #the last R (user defined) set of 2 keypoints (of distance Q) in batch sequence
 	L2 = 8	#default: 8	#normalisation length for each reference set
-
+	if not ATNLPpredictTransformedTokens: assert Q == 1
+	
 referenceSetPosDelimitersStr = []
 if(ATNLPuseMultiLevelTokenPrediction):
 	for name in ATNLPmultiLevelTokensDelimiterNames:

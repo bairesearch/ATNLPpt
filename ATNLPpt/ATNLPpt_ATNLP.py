@@ -51,10 +51,10 @@ def createModel(dataset):
 		print("\t ---")
 		if(ATNLPusePredictionHead):
 			print("\t ATNLPusePredictionHead = ", ATNLPusePredictionHead)
-			print("\t ATNLPcompareUntransformedTokenPrediction = ", ATNLPcompareUntransformedTokenPrediction)
+			print("\t ATNLPdisableTransformation = ", ATNLPdisableTransformation)
 			print("\t ATNLPuseMultiLevelTokenPrediction = ", ATNLPuseMultiLevelTokenPrediction)
 			print("\t ATNLPmultiLevelOnlyPredictLastLevel = ", ATNLPmultiLevelOnlyPredictLastLevel)
-			print("\t ATNLPuseSequenceLevelPrediction = ", ATNLPuseSequenceLevelPrediction)
+			print("\t ATNLPuseSequenceLevelPredictionInput = ", ATNLPuseSequenceLevelPredictionInput)
 			print("\t backboneType = ", backboneType)
 		else:
 			print("\t ATNLPnormalisedSnapshotsSparseTensors = ", ATNLPnormalisedSnapshotsSparseTensors)
