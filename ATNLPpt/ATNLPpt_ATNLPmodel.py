@@ -263,7 +263,7 @@ class ATNLPmodel(nn.Module):
 					if(ATNLPpredictTransformedTokens):
 						y = self.generateClassTargetsAll(seq_input, onehotTargets)
 					else:
-						y = input_ids	#CHECKTHIS: no shift
+						y = input_ids
 					if(ATNLPdisableTransformationStrict):
 						xPadMask = ATNLPpt_prediction.derivePadMaskFromIds(input_ids, NLPpadTokenID)	#xPadMask is not used
 					else:	#ie ATNLPpredictTransformedTokens=False
@@ -279,6 +279,16 @@ class ATNLPmodel(nn.Module):
 					yPadMask = yPadMask[valid_rows]
 					if predictionInput.numel() == 0:
 						continue
+					if(not ATNLPpredictTransformedTokens):
+						# prepare decoder inputs/targets by shifting the token sequence
+						y_in = y[:, :-1]
+						y_tgt = y[:, 1:]
+						y_in_pad = yPadMask[:, :-1]
+						y_tgt_pad = yPadMask[:, 1:]
+						if(y_in.shape[1] == 0):
+							continue
+						y = (y_in, y_tgt)
+						yPadMask = (y_in_pad, y_tgt_pad)
 					#print("l = ", l, ", predictionInput.count_nonzero() = ", predictionInput.count_nonzero())
 					
 				numSubsamplesWithKeypoints += 1
@@ -288,9 +298,14 @@ class ATNLPmodel(nn.Module):
 						self.predictionModel[l].train()
 						if(ATNLPpredictTransformedTokens):
 							logits = self.predictionModel[l](predictionInput, xPadMask)
+							loss = ATNLPpt_prediction.loss_function(logits, y, yPadMask, onehotTargets)
+							matches = ATNLPpt_prediction.calculate_matches(logits, y, onehotTargets)
 						else:
-							logits = self.predictionModel[l](predictionInput, y, xPadMask, yPadMask)
-						loss = ATNLPpt_prediction.loss_function(logits, y, yPadMask, onehotTargets)
+							y_in, y_tgt = y
+							y_in_pad, y_tgt_pad = yPadMask
+							logits = self.predictionModel[l](predictionInput, y_in, xPadMask, y_in_pad)
+							loss = ATNLPpt_prediction.loss_function(logits, y_tgt, y_tgt_pad, onehotTargets)
+							matches = ATNLPpt_prediction.calculate_matches(logits, y_tgt, onehotTargets)
 						optim.zero_grad()
 						loss.backward()
 						optim.step()
@@ -298,10 +313,14 @@ class ATNLPmodel(nn.Module):
 					self.predictionModel[l].eval()
 					if(ATNLPpredictTransformedTokens):
 						logits = self.predictionModel[l](predictionInput, xPadMask)
+						loss = ATNLPpt_prediction.loss_function(logits, y, yPadMask, onehotTargets)
+						matches = ATNLPpt_prediction.calculate_matches(logits, y, onehotTargets)
 					else:
-						logits = self.predictionModel[l](predictionInput, y, xPadMask, yPadMask)
-					loss = ATNLPpt_prediction.loss_function(logits, y, yPadMask, onehotTargets)
-				matches = ATNLPpt_prediction.calculate_matches(logits, y, onehotTargets)
+						y_in, y_tgt = y
+						y_in_pad, y_tgt_pad = yPadMask
+						logits = self.predictionModel[l](predictionInput, y_in, xPadMask, y_in_pad)
+						loss = ATNLPpt_prediction.loss_function(logits, y_tgt, y_tgt_pad, onehotTargets)
+						matches = ATNLPpt_prediction.calculate_matches(logits, y_tgt, onehotTargets)
 				#print("y = ", y)
 				#print("logits = ", logits)
 				#print("matches = ", matches)
