@@ -332,8 +332,8 @@ def loss_function(logits: torch.Tensor, targets: torch.Tensor, padMask: torch.Te
 		"""Cross-entropy loss over flattened B1*L dimension with PAD masked out."""
 		# targets: (B, L, C) one-hot; convert to indices
 		targets_idx = targets			  # (B, L)
-		logits = logits.view(-1, logits.size(-1))			 # (B*L, C)
-		targets_idx = targets_idx.view(-1)					# (B*L)
+		logits = logits.reshape(-1, logits.size(-1))			 # (B*L, C)
+		targets_idx = targets_idx.reshape(-1)					# (B*L)
 		loss = F.cross_entropy(logits, targets_idx, ignore_index=NLPpadTokenID)
 	return loss
 	
