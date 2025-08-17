@@ -333,7 +333,7 @@ class ATNLPmodel(nn.Module):
 					continue
 				
 				onehotTargets = False
-				y, classTargets = self.generateClassTargetsSlidingWindow(slidingWindowIndex, normalisedSnapshots, seq_input)
+				y_tgt, classTargets = self.generateClassTargetsSlidingWindow(slidingWindowIndex, normalisedSnapshots, seq_input)
 			
 				normalisedSnapshots = normalisedSnapshots.to_sparse_coo()
 				normalisedSnapshots = normalisedSnapshots.coalesce()
@@ -363,10 +363,10 @@ class ATNLPmodel(nn.Module):
 				if(comparisonFound):
 					loss = 0.0	#not used
 					predictions = top_cls
-					matches = (predictions == y)
+					matches = (predictions == y_tgt)
 				
 			if(comparisonFound):
-				accuracy = self.calculateAccuracy(matches, y, onehotTargets)
+				accuracy = self.calculateAccuracy(matches, y_tgt, onehotTargets)
 				
 				accuracyAllWindows += accuracy
 				lossAllWindows += loss
