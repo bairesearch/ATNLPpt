@@ -442,7 +442,7 @@ elif(useNLPDataset):
 		if(useCloudExecution):
 			batchSize = 64
 		else:
-			batchSize = 4	#16
+			batchSize = 4	#4	#16
 	numWorkers = 0	#default: 0	(required for stateTestDataset:datasetTestRows to be enforced) #orig = 2	#set numWorkers=1 for simplify dataset determinism during streaming (numWorkers=2 will alternate between selecting articles from wikipedia dataset shard N and shard N+1)
 	if(useCloudExecution):
 		datasetName = "wikimedia/wikipedia"

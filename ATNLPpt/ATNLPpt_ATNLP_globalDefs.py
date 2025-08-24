@@ -60,9 +60,10 @@ if(ATNLPusePredictionHead):
 	ATNLPdisableTransformation = False	#default: False	#train a predictive network with untransformed token prediction (ie standard transformer implementation)	#dev only
 	if(ATNLPdisableTransformation):
 		ATNLPdisableTransformationStrict = True	#generateSequenceInput does not expand (bert) tokens to characters
+		ATNLPpredictTransformedTokens = True	#default: True (note with ATNLPdisableTransformation this option predicts original tokens, else performs redundant sequence-to-sequence translation)
 	else:
-		ATNLPpredictTransformedTokens = False	#optional	#orig: False 	#predict transformed tokens (else predict untransformed tokens)
-		ATNLPuseSequenceLevelPredictionInput = False	#optional	ATNLPpredictTransformedTokens: predicts sequence tokens (eg reference sets) from sequence tokens, #!ATNLPpredictTransformedTokens: predicts untransformed subsequence tokens from sequence tokens		#ATNLPpredictTransformedTokens: - if !ATNLPuseSequenceLevelPredictionInput, prediction target = 'subwords'; or if ATNLPuseSequenceLevelPredictionInput: prediction target = 'referenceSets'
+		ATNLPpredictTransformedTokens = False	#optional	#orig: False 	#predict transformed tokens (else predict untransformed tokens using sequence-to-sequence translation)
+		ATNLPuseSequenceLevelPredictionInput = True	#optional	ATNLPpredictTransformedTokens: predicts sequence tokens (eg reference sets) from sequence tokens, #!ATNLPpredictTransformedTokens: predicts untransformed subsequence tokens from sequence tokens		#ATNLPpredictTransformedTokens: - if !ATNLPuseSequenceLevelPredictionInput, prediction target = 'subwords'; or if ATNLPuseSequenceLevelPredictionInput: prediction target = 'referenceSets'
 		ATNLPuseMultiLevelTokenPrediction = False	#optional	#predicts char/subword (bert), subsentence (reference set), sentence, paragraph tokens
 		if(ATNLPuseMultiLevelTokenPrediction):
 			ATNLPmultiLevelOnlyPredictLastLevel = False	#default: False	#only perform prediction across last level of token generation

@@ -169,9 +169,9 @@ class ATNLPmodel(nn.Module):
 			kp_indices_batch, kp_meta_batch, kp_prev_level_used_batch = ATNLPpt_keypoints.build_keypoints(l, x['spacy_input_ids'], x['spacy_pos'], x['spacy_tag'], x['spacy_text'], x['spacy_offsets'])
 			if(debugATNLPkeypoints):
 				print("kp_indices_batch = ", kp_indices_batch)
-			
+		
+		input_ids, input_offsets  = self.generateSequenceInputOrig(x)
 		if(l == 0):
-			input_ids, input_offsets  = self.generateSequenceInputOrig(x)
 			seq_input = self.generateSequenceInput(input_ids, input_offsets)
 			B1 = self.batchSize = seq_input.shape[0]
 
@@ -270,26 +270,29 @@ class ATNLPmodel(nn.Module):
 						xPadMask = ATNLPpt_prediction.derivePadMaskFromProbs(predictionInput, NLPpadTokenID)
 					yPadMask = ATNLPpt_prediction.derivePadMaskFromIds(input_ids, NLPpadTokenID)
 
-				if(not ATNLPdisableTransformation):
-					#filter out empty sequences before the forward pass
-					valid_rows = ~xPadMask.all(dim=1)
-					predictionInput = predictionInput[valid_rows]
-					y = y[valid_rows]
-					xPadMask = xPadMask[valid_rows]
-					yPadMask = yPadMask[valid_rows]
-					if predictionInput.numel() == 0:
+				#filter out empty sequences before the forward pass
+				valid_rows = ~xPadMask.all(dim=1)
+				predictionInput = predictionInput[valid_rows]
+				y = y[valid_rows]
+				xPadMask = xPadMask[valid_rows]
+				yPadMask = yPadMask[valid_rows]
+				if predictionInput.numel() == 0:
+					continue
+
+				if(ATNLPpredictTransformedTokens):
+					y_tgt = y
+				else:
+					# prepare decoder inputs/targets by shifting the token sequence
+					y_in = y[:, :-1]
+					y_tgt = y[:, 1:]
+					y_in_pad = yPadMask[:, :-1]
+					y_tgt_pad = yPadMask[:, 1:]
+					if(y_in.shape[1] == 0):
 						continue
-					if(not ATNLPpredictTransformedTokens):
-						# prepare decoder inputs/targets by shifting the token sequence
-						y_in = y[:, :-1]
-						y_tgt = y[:, 1:]
-						y_in_pad = yPadMask[:, :-1]
-						y_tgt_pad = yPadMask[:, 1:]
-						if(y_in.shape[1] == 0):
-							continue
-						y = (y_in, y_tgt)
-						yPadMask = (y_in_pad, y_tgt_pad)
-					#print("l = ", l, ", predictionInput.count_nonzero() = ", predictionInput.count_nonzero())
+					y = (y_in, y_tgt)
+					yPadMask = (y_in_pad, y_tgt_pad)
+				#print("l = ", l, ", predictionInput.count_nonzero() = ", predictionInput.count_nonzero())
+		
 					
 				numSubsamplesWithKeypoints += 1
 								
