@@ -849,11 +849,14 @@ elif(useNLPDataset):
 		ds_tok = dataset.map(encode, batched=True, remove_columns=dataset.column_names)
 		ds_tok = ds_tok.with_format("torch")
 
-		# If the result is map-style convert it, otherwise keep it as-is
+		# Shuffle depending on dataset type
+		shuffle_seed = random.randint(0, 2**32 - 1)
 		if isinstance(ds_tok, HFDIterable):
-			ds_iter = ds_tok                      # already iterable -> nothing to do
+			shuffle_buffer_size = 1000  # small in-memory buffer for iterable streams
+			ds_iter = ds_tok.shuffle(seed=shuffle_seed, buffer_size=shuffle_buffer_size)
 		else:
-			ds_iter = ds_tok.to_iterable_dataset()   # map-style -> convert
+			ds_tok = ds_tok.shuffle(seed=shuffle_seed)
+			ds_iter = ds_tok.to_iterable_dataset()
 
 		ds = RawSampleDataset(ds_iter)
 
